@@ -23,14 +23,14 @@ def get_num_bytes(obj):
 
 def sprint_fancy_num_bytes(num_bytes):
     
-    units = ["B", "KB", "MB", "GB"]
+    units = ["B", "KiB", "MiB", "GiB"]
     unit_idx = 0
 
     while num_bytes > 1024:
         num_bytes /= 1024
         unit_idx += 1
 
-    byte_fancy_str = "{:.2f}{:s}".format(num_bytes, units[unit_idx])
+    byte_fancy_str = "{:.3f}{:s}".format(num_bytes, units[unit_idx])
 
     return byte_fancy_str
 
@@ -73,3 +73,36 @@ def generate_unused_filename(dir="."):
         filename = os.path.join(dir, str(uuid.uuid4()))
     
     return filename
+
+
+def cutdown_list(my_list, ratio):
+    """
+    TODO
+    """
+
+    new_len = round(len(my_list) * ratio)
+    return my_list[:new_len]
+
+
+
+class EarlyStopper:
+    
+
+    def __init__(self, patience=1, min_delta=0):
+
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = 0
+        self.min_val_loss = float("inf")
+
+
+    def early_stop(self, val_loss):
+        
+        if val_loss < self.min_val_loss:
+            self.min_val_loss = val_loss
+            self.counter = 0
+        elif val_loss > (self.min_val_loss + self.min_delta):
+            self.counter += 1
+            if self.counter >= self.patience:
+                return True
+        return False
