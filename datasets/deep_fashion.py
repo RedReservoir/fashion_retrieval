@@ -1,15 +1,16 @@
 import torch
 import torchvision
 
-import torchvision.io
 from torch.utils.data import Dataset
+import torchvision.io
 
 import os
 from multiprocessing import Lock
 
-import utils
-
 import random
+
+import utils.mem
+
 
 
 class CatAttrPredBM(Dataset):
@@ -459,35 +460,35 @@ class CatAttrPredBM(Dataset):
 
         num_bytes = 0
 
-        num_bytes += utils.get_num_bytes(self._dataset_dir)
-        num_bytes += utils.get_num_bytes(self._image_transform)
+        num_bytes += utils.mem.get_num_bytes(self._dataset_dir)
+        num_bytes += utils.mem.get_num_bytes(self._image_transform)
 
-        num_bytes += utils.get_num_bytes(self._train_mask_idxs)
-        num_bytes += utils.get_num_bytes(self._test_mask_idxs)
-        num_bytes += utils.get_num_bytes(self._val_mask_idxs)
+        num_bytes += utils.mem.get_num_bytes(self._train_mask_idxs)
+        num_bytes += utils.mem.get_num_bytes(self._test_mask_idxs)
+        num_bytes += utils.mem.get_num_bytes(self._val_mask_idxs)
 
-        num_bytes += utils.get_num_bytes(self._category_name_list)
-        num_bytes += utils.get_num_bytes(self._supcategory_idx_list)
-        num_bytes += utils.get_num_bytes(self._supcategory_name_list)
+        num_bytes += utils.mem.get_num_bytes(self._category_name_list)
+        num_bytes += utils.mem.get_num_bytes(self._supcategory_idx_list)
+        num_bytes += utils.mem.get_num_bytes(self._supcategory_name_list)
 
-        num_bytes += utils.get_num_bytes(self._attribute_name_list)
-        num_bytes += utils.get_num_bytes(self._supattribute_idx_list)
-        num_bytes += utils.get_num_bytes(self._supattribute_name_list)
+        num_bytes += utils.mem.get_num_bytes(self._attribute_name_list)
+        num_bytes += utils.mem.get_num_bytes(self._supattribute_idx_list)
+        num_bytes += utils.mem.get_num_bytes(self._supattribute_name_list)
 
-        num_bytes += utils.get_num_bytes(self._list_eval_partition_cursor_list)
-        num_bytes += utils.get_num_bytes(self._image_bbox_cursor_list)
-        num_bytes += utils.get_num_bytes(self._image_category_cursor_list)
-        num_bytes += utils.get_num_bytes(self._image_attribute_cursor_list)
+        num_bytes += utils.mem.get_num_bytes(self._list_eval_partition_cursor_list)
+        num_bytes += utils.mem.get_num_bytes(self._image_bbox_cursor_list)
+        num_bytes += utils.mem.get_num_bytes(self._image_category_cursor_list)
+        num_bytes += utils.mem.get_num_bytes(self._image_attribute_cursor_list)
 
-        num_bytes += utils.get_num_bytes(self._list_eval_partition_file)
-        num_bytes += utils.get_num_bytes(self._image_bbox_file)
-        num_bytes += utils.get_num_bytes(self._image_category_file)
-        num_bytes += utils.get_num_bytes(self._image_attribute_file)
+        num_bytes += utils.mem.get_num_bytes(self._list_eval_partition_file)
+        num_bytes += utils.mem.get_num_bytes(self._image_bbox_file)
+        num_bytes += utils.mem.get_num_bytes(self._image_category_file)
+        num_bytes += utils.mem.get_num_bytes(self._image_attribute_file)
 
-        num_bytes += utils.get_num_bytes(self._list_eval_partition_file_lock)
-        num_bytes += utils.get_num_bytes(self._image_bbox_file_lock)
-        num_bytes += utils.get_num_bytes(self._image_category_file_lock)
-        num_bytes += utils.get_num_bytes(self._image_attribute_file_lock)
+        num_bytes += utils.mem.get_num_bytes(self._list_eval_partition_file_lock)
+        num_bytes += utils.mem.get_num_bytes(self._image_bbox_file_lock)
+        num_bytes += utils.mem.get_num_bytes(self._image_category_file_lock)
+        num_bytes += utils.mem.get_num_bytes(self._image_attribute_file_lock)
 
         return num_bytes
 
@@ -1047,30 +1048,30 @@ class ConsToShopClothRetrBM(Dataset):
 
         num_bytes = 0
 
-        num_bytes += utils.get_num_bytes(self._dataset_dir)
-        num_bytes += utils.get_num_bytes(self._image_transform)
+        num_bytes += utils.mem.get_num_bytes(self._dataset_dir)
+        num_bytes += utils.mem.get_num_bytes(self._image_transform)
 
-        num_bytes += utils.get_num_bytes(self._train_mask_idxs)
-        num_bytes += utils.get_num_bytes(self._test_mask_idxs)
-        num_bytes += utils.get_num_bytes(self._val_mask_idxs)
+        num_bytes += utils.mem.get_num_bytes(self._train_mask_idxs)
+        num_bytes += utils.mem.get_num_bytes(self._test_mask_idxs)
+        num_bytes += utils.mem.get_num_bytes(self._val_mask_idxs)
 
-        num_bytes += utils.get_num_bytes(self._attribute_name_list)
-        num_bytes += utils.get_num_bytes(self._supattribute_idx_list)
-        num_bytes += utils.get_num_bytes(self._supattribute_name_list)
+        num_bytes += utils.mem.get_num_bytes(self._attribute_name_list)
+        num_bytes += utils.mem.get_num_bytes(self._supattribute_idx_list)
+        num_bytes += utils.mem.get_num_bytes(self._supattribute_name_list)
 
-        num_bytes += utils.get_num_bytes(self._list_eval_partition_cursor_list)
-        num_bytes += utils.get_num_bytes(self._list_eval_partition_idxs_cursor_list)
-        num_bytes += utils.get_num_bytes(self._image_bbox_cursor_list)
-        num_bytes += utils.get_num_bytes(self._item_attribute_cursor_list)
+        num_bytes += utils.mem.get_num_bytes(self._list_eval_partition_cursor_list)
+        num_bytes += utils.mem.get_num_bytes(self._list_eval_partition_idxs_cursor_list)
+        num_bytes += utils.mem.get_num_bytes(self._image_bbox_cursor_list)
+        num_bytes += utils.mem.get_num_bytes(self._item_attribute_cursor_list)
 
-        num_bytes += utils.get_num_bytes(self._list_eval_partition_file)
-        num_bytes += utils.get_num_bytes(self._list_eval_partition_aux_idxs_file)
-        num_bytes += utils.get_num_bytes(self._image_bbox_file)
-        num_bytes += utils.get_num_bytes(self._item_attribute_file)
+        num_bytes += utils.mem.get_num_bytes(self._list_eval_partition_file)
+        num_bytes += utils.mem.get_num_bytes(self._list_eval_partition_aux_idxs_file)
+        num_bytes += utils.mem.get_num_bytes(self._image_bbox_file)
+        num_bytes += utils.mem.get_num_bytes(self._item_attribute_file)
 
-        num_bytes += utils.get_num_bytes(self._list_eval_partition_file_lock)
-        num_bytes += utils.get_num_bytes(self._list_eval_partition_aux_idxs_file_lock)
-        num_bytes += utils.get_num_bytes(self._image_bbox_file_lock)
-        num_bytes += utils.get_num_bytes(self._item_attribute_file_lock)
+        num_bytes += utils.mem.get_num_bytes(self._list_eval_partition_file_lock)
+        num_bytes += utils.mem.get_num_bytes(self._list_eval_partition_aux_idxs_file_lock)
+        num_bytes += utils.mem.get_num_bytes(self._image_bbox_file_lock)
+        num_bytes += utils.mem.get_num_bytes(self._item_attribute_file_lock)
 
         return num_bytes

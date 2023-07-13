@@ -1,7 +1,8 @@
 import torch
 import torchvision
 
-import heads
+import arch.heads
+
 
 
 class RetModel(torch.nn.Module):
@@ -45,8 +46,8 @@ class ClsRetModel(torch.nn.Module):
         super(ClsRetModel, self).__init__()
 
         self.backbone = backbone
-        self.cls_head = heads.ClsHead(backbone.out_shape, num_classes)
-        self.ret_head = heads.RetHead(backbone.out_shape, emb_size)
+        self.cls_head = arch.heads.ClsHead(backbone.out_shape, num_classes)
+        self.ret_head = arch.heads.RetHead(backbone.out_shape, emb_size)
 
 
     def forward(self, x):
