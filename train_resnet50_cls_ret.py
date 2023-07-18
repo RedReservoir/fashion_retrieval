@@ -10,7 +10,7 @@ import torchvision
 
 from torch.utils.data import DataLoader, Subset
 
-from datasets import deep_fashion
+from datasets import deep_fashion, combine
 from arch import backbones, models, heads
 
 from tqdm import tqdm
@@ -20,6 +20,7 @@ import utils.mem, utils.list, utils.training, utils.time, utils.log
 from time import time
 from datetime import datetime
 
+from itertools import chain, reduce
 
 ########
 
@@ -27,7 +28,9 @@ from datetime import datetime
 def save_checkpoint(filename):
 
     checkpoint = {
-        "model_state_dict": model.module.state_dict()
+        "backbone_state_dict": backbone.state_dict(),
+        "ret_head_state_dict": ret_head.state_dict(),
+        "cls_head_state_dict": cls_head.state_dict()
         }
 
     torch.save(checkpoint, filename)
@@ -41,11 +44,15 @@ def load_checkpoint(filename):
 
     backbone = backbones.ResNet50Backbone()
 
-    model = models.RetModel(backbone, 1024).to(first_device)
-    model = torch.nn.DataParallel(model, device_ids=list(range(len(device_idxs))))
-    model.module.load_state_dict(checkpoint["model_state_dict"])
+    cls_head = heads.ClsHead(backbone.out_shape, 50)
+    ret_head = heads.RetHead(backbone.out_shape, 1024)
 
-    return model
+    backbone.load_state_dict(checkpoint["backbone_state_dict"])
+
+    cls_head.load_state_dict(checkpoint["ret_head_state_dict"])
+    ret_head.load_state_dict(checkpoint["cls_head_state_dict"])
+
+    return backbone, cls_head, ret_head
 
 
 def save_train_data(filename):
@@ -56,40 +63,39 @@ def save_train_data(filename):
 
 def train_epoch(data_loader, with_tqdm=True):
 
-    model.train()
-    total_loss = 0
+    backbone.train()
+    ret_head.train()
+    cls_head.train()
+
+    total_loss_item = 0
+    total_task_loss_item_list = [0] * 2
 
     loader_gen = data_loader
     if with_tqdm: loader_gen = tqdm(loader_gen)
 
     for batch in loader_gen:
 
-        anc_imgs = batch[0]
-        pos_imgs = batch[1]
-        neg_imgs = batch[2]
+        batch_losses = batch_evaluation(batch)
+        total_batch_loss = reduce(sum, map(lambda item: item[0], batch_losses))
 
-        with torch.cuda.amp.autocast():
-
-            anc_emb = model(anc_imgs)
-            pos_emb = model(pos_imgs)
-            neg_emb = model(neg_imgs)
+        total_loss_item += total_batch_loss.item()
+        for idx, loss in batch_losses: total_task_loss_item_list[idx] += loss.item()
             
-            triplet_loss = torch.nn.TripletMarginLoss()
-            loss = triplet_loss(anc_emb, pos_emb, neg_emb)
-
-        total_loss += loss.item()
-
-        scaler.scale(loss).backward()
+        scaler.scale(total_batch_loss).backward()
         scaler.step(optimizer)
         scaler.update()
 
-    return total_loss
+    return total_loss_item, total_task_loss_item_list
 
 
 def eval_epoch(data_loader, with_tqdm=True):
 
-    model.eval()
-    total_loss = 0
+    backbone.eval()
+    ret_head.eval()
+    cls_head.eval()
+
+    total_loss_item = 0
+    total_task_loss_item_list = [0] * 2
 
     with torch.no_grad():
 
@@ -98,22 +104,55 @@ def eval_epoch(data_loader, with_tqdm=True):
 
         for batch in loader_gen:
 
-            anc_imgs = batch[0]
-            pos_imgs = batch[1]
-            neg_imgs = batch[2]
+            batch_losses = batch_evaluation(batch)
+            total_batch_loss = reduce(sum, map(lambda item: item[0], batch_losses))
+
+            total_loss_item += total_batch_loss.item()
+            for idx, loss in batch_losses: total_task_loss_item_list[idx] += loss.item()
+
+    return total_loss_item, total_task_loss_item_list
+
+
+def batch_evaluation(batch):
+
+    batch_losses = []
+
+    for idx, sub_batch in batch:
+
+        loss = None
+
+        if idx == 0:
+
+            imgs = sub_batch[0]
+            cats = sub_batch[1]
 
             with torch.cuda.amp.autocast():
 
-                anc_emb = model(anc_imgs)
-                pos_emb = model(pos_imgs)
-                neg_emb = model(neg_imgs)
+                pred_cats = cls_head(imgs)
 
+                ce_loss = torch.nn.CrossEntropyLoss()
+                loss = ce_loss(pred_cats, cats)
+
+            batch_losses.append((idx, loss))
+
+        if idx == 1:
+
+            anc_imgs = sub_batch[0]
+            pos_imgs = sub_batch[1]
+            neg_imgs = sub_batch[2]
+
+            with torch.cuda.amp.autocast():
+
+                anc_emb = ret_head(anc_imgs)
+                pos_emb = ret_head(pos_imgs)
+                neg_emb = ret_head(neg_imgs)
+        
                 triplet_loss = torch.nn.TripletMarginLoss()
                 loss = triplet_loss(anc_emb, pos_emb, neg_emb)
 
-            total_loss += loss.item()
+            batch_losses.append((idx, loss))
 
-    return total_loss
+    return batch_losses
 
 
 ########
@@ -170,25 +209,43 @@ if __name__ == "__main__":
 
     logger.print("Create datasets")
 
-    ctsrbm_image_transform = torchvision.models.ResNet50_Weights.DEFAULT.transforms()
-    ctsrbm_image_transform.antialias = True
+    backbone_image_transform = torchvision.models.ResNet50_Weights.DEFAULT.transforms()
+    backbone_image_transform.antialias = True
 
     ctsrbm_dataset_dir = os.path.join(pathlib.Path.home(), "data", "DeepFashion", "Consumer-to-shop Clothes Retrieval Benchmark")
+    ctsrbm_dataset = deep_fashion.ConsToShopClothRetrBM(ctsrbm_dataset_dir, backbone_image_transform)
 
-    ctsrbm_dataset = deep_fashion.ConsToShopClothRetrBM(ctsrbm_dataset_dir, ctsrbm_image_transform)
+    capbm_dataset_dir = os.path.join(pathlib.Path.home(), "data", "DeepFashion", "Category and Attribute Prediction Benchmark")
+    capbm_dataset = deep_fashion.CatAttrPredBM(capbm_dataset_dir, backbone_image_transform)
 
     cutdown_ratio = 1
 
     if cutdown_ratio == 1:
+
         ctsrbm_train_dataset = Subset(ctsrbm_dataset, ctsrbm_dataset.get_split_mask_idxs("train"))
         ctsrbm_test_dataset = Subset(ctsrbm_dataset, ctsrbm_dataset.get_split_mask_idxs("test"))
         ctsrbm_val_dataset = Subset(ctsrbm_dataset, ctsrbm_dataset.get_split_mask_idxs("val"))
+
+        capbm_train_dataset = Subset(capbm_dataset, capbm_dataset.get_split_mask_idxs("train"))
+        capbm_test_dataset = Subset(capbm_dataset, capbm_dataset.get_split_mask_idxs("test"))
+        capbm_val_dataset = Subset(capbm_dataset, capbm_dataset.get_split_mask_idxs("val"))
+    
     else:
+    
         ctsrbm_train_dataset = Subset(ctsrbm_dataset, utils.list.cutdown_list(ctsrbm_dataset.get_split_mask_idxs("train"), cutdown_ratio))
         ctsrbm_test_dataset = Subset(ctsrbm_dataset, utils.list.cutdown_list(ctsrbm_dataset.get_split_mask_idxs("test"), cutdown_ratio))
         ctsrbm_val_dataset = Subset(ctsrbm_dataset, utils.list.cutdown_list(ctsrbm_dataset.get_split_mask_idxs("val"), cutdown_ratio))
 
+        capbm_train_dataset = Subset(capbm_dataset, utils.list.cutdown_list(capbm_dataset.get_split_mask_idxs("train"), cutdown_ratio))
+        capbm_test_dataset = Subset(capbm_dataset, utils.list.cutdown_list(capbm_dataset.get_split_mask_idxs("test"), cutdown_ratio))
+        capbm_val_dataset = Subset(capbm_dataset, utils.list.cutdown_list(capbm_dataset.get_split_mask_idxs("val"), cutdown_ratio))
+
+    mixed_train_dataset = combine.Fusion([ctsrbm_train_dataset, capbm_train_dataset])
+    mixed_test_dataset = combine.Fusion([ctsrbm_test_dataset, capbm_test_dataset])
+    mixed_val_dataset = combine.Fusion([ctsrbm_val_dataset, capbm_val_dataset])
+
     train_data["settings"]["datasets"] = [
+        "DeepFashion Category and Attribute Prediction Benchmark"
         "DeepFashion Consumer-to-shop Clothes Retrieval Benchmark"
     ]
 
@@ -199,9 +256,9 @@ if __name__ == "__main__":
     batch_size = 256
     num_workers = 16
 
-    train_loader = DataLoader(ctsrbm_train_dataset, batch_size=batch_size, num_workers=num_workers)
-    test_loader = DataLoader(ctsrbm_test_dataset, batch_size=batch_size, num_workers=num_workers)
-    val_loader = DataLoader(ctsrbm_val_dataset, batch_size=batch_size, num_workers=num_workers)
+    train_loader = DataLoader(mixed_train_dataset, batch_size=batch_size, num_workers=num_workers)
+    test_loader = DataLoader(mixed_test_dataset, batch_size=batch_size, num_workers=num_workers)
+    val_loader = DataLoader(mixed_val_dataset, batch_size=batch_size, num_workers=num_workers)
 
     train_data["settings"]["data_loading"] = {
         "batch_size": batch_size,
@@ -213,13 +270,21 @@ if __name__ == "__main__":
     logger.print("Create model and training settings")
 
     backbone = backbones.ResNet50Backbone()
-    model = models.RetModel(backbone, 1024).to(first_device)
-    model = torch.nn.DataParallel(model, device_ids=list(range(len(device_idxs))))
+    
+    cls_head = heads.ClsHead(backbone.out_shape, 50)
+    ret_head = heads.RetHead(backbone.out_shape, 1024)
+
+    cls_model = models.BackboneAndHead(backbone, cls_head).to(first_device)
+    cls_model = torch.nn.DataParallel(cls_model, device_ids=list(range(len(device_idxs))))
+
+    ret_model = models.BackboneAndHead(backbone, ret_head).to(first_device)
+    ret_model = torch.nn.DataParallel(ret_model, device_ids=list(range(len(device_idxs))))
 
     train_data["settings"]["model"] = {
         "backbone": "ResNet50Backbone",
         "heads": [
-            "Image retrieval"
+            "RetHead",
+            "ClsHead"
         ]
     }
 
@@ -238,13 +303,21 @@ if __name__ == "__main__":
 
     train_data["results"]["stage_1"]["mean_train_loss_list"] = []
     train_data["results"]["stage_1"]["mean_val_loss_list"] = []
+    train_data["results"]["stage_1"]["mean_cls_train_loss_list"] = []
+    train_data["results"]["stage_1"]["mean_cls_val_loss_list"] = []
+    train_data["results"]["stage_1"]["mean_ret_train_loss_list"] = []
+    train_data["results"]["stage_1"]["mean_ret_val_loss_list"] = []
     train_data["results"]["stage_1"]["train_epoch_time_list"] = []
     train_data["results"]["stage_1"]["val_epoch_time_list"] = []
 
     ## Training settings
 
     optimizer = torch.optim.Adam(
-        model.parameters(),
+        chain(
+            backbone.parameters(),
+            cls_head.parameters(),
+            ret_head.parameters()
+        ),
         lr=1e-3,
     )
 
@@ -284,7 +357,8 @@ if __name__ == "__main__":
     
     ## Begin training
 
-    model.module.freeze_backbone()
+    for param in backbone.parameters():
+        param.requires_grad = False
 
     while current_epoch < max_epoch:
 
@@ -295,32 +369,41 @@ if __name__ == "__main__":
         train_data["settings"]["stage_1"]["learning_rate_list"].append(scheduler.get_last_lr())
 
         start_time = time()
-        train_loss = train_epoch(train_loader) 
+        train_loss, task_train_loss_list = train_epoch(train_loader) 
         end_time = time()
+        train_epoch_time = end_time - start_time
 
-        train_data["results"]["stage_1"]["train_epoch_time_list"].append(end_time - start_time)
-
-        logger.print("  Train epoch time: {:s}".format(utils.time.sprint_fancy_time_diff(end_time - start_time)))
+        logger.print("  Train epoch time: {:s}".format(utils.time.sprint_fancy_time_diff(train_epoch_time)))
 
         start_time = time()
-        val_loss = eval_epoch(val_loader)
+        val_loss, task_val_loss_list = eval_epoch(val_loader)
         end_time = time()
+        val_epoch_time = end_time - start_time
 
-        train_data["results"]["stage_1"]["val_epoch_time_list"].append(end_time - start_time)
+        logger.print("  Val epoch time:   {:s}".format(utils.time.sprint_fancy_time_diff(val_epoch_time)))
 
-        logger.print("  Val epoch time:   {:s}".format(utils.time.sprint_fancy_time_diff(end_time - start_time)))
-
-        mean_train_loss = train_loss / len(ctsrbm_train_dataset)
-        mean_val_loss = val_loss / len(ctsrbm_val_dataset)
-
-        train_data["results"]["stage_1"]["mean_train_loss_list"].append(mean_train_loss)
-        train_data["results"]["stage_1"]["mean_val_loss_list"].append(mean_val_loss)
+        mean_train_loss = train_loss / len(mixed_train_dataset)
+        mean_val_loss = val_loss / len(mixed_val_dataset)
 
         logger.print("  Mean train loss: {:.2e}".format(mean_train_loss))
         logger.print("  Mean val loss:   {:.2e}".format(mean_val_loss))
             
         logger.print("  Current memory usage:")
         logger.print(utils.mem.sprint_memory_usage(device_idxs, num_spaces=4))
+
+        mean_cls_train_loss = task_train_loss_list[0] / len(ctsrbm_train_dataset)
+        mean_cls_val_loss = task_val_loss_list[0] / len(ctsrbm_train_dataset)
+        mean_ret_train_loss = task_train_loss_list[1] / len(capbm_train_dataset)
+        mean_ret_val_loss = task_val_loss_list[1] / len(capbm_train_dataset)
+
+        train_data["results"]["stage_1"]["mean_train_loss_list"].append(mean_train_loss)
+        train_data["results"]["stage_1"]["mean_val_loss_list"].append(mean_val_loss)
+        train_data["results"]["stage_1"]["mean_cls_train_loss_list"].append(mean_cls_train_loss)
+        train_data["results"]["stage_1"]["mean_cls_val_loss_list"].append(mean_cls_val_loss)
+        train_data["results"]["stage_1"]["mean_ret_train_loss_list"].append(mean_ret_train_loss)
+        train_data["results"]["stage_1"]["mean_ret_val_loss_list"].append(mean_ret_val_loss)
+        train_data["results"]["stage_1"]["train_epoch_time_list"].append(train_epoch_time)
+        train_data["results"]["stage_1"]["val_epoch_time_list"].append(val_epoch_time)
 
         if early_stopper.early_stop(mean_val_loss):
 
@@ -367,13 +450,38 @@ if __name__ == "__main__":
 
     train_data["results"]["stage_2"]["mean_train_loss_list"] = []
     train_data["results"]["stage_2"]["mean_val_loss_list"] = []
+    train_data["results"]["stage_2"]["mean_cls_train_loss_list"] = []
+    train_data["results"]["stage_2"]["mean_cls_val_loss_list"] = []
+    train_data["results"]["stage_2"]["mean_ret_train_loss_list"] = []
+    train_data["results"]["stage_2"]["mean_ret_val_loss_list"] = []
     train_data["results"]["stage_2"]["train_epoch_time_list"] = []
     train_data["results"]["stage_2"]["val_epoch_time_list"] = []
+    
+    ## Load stage 1 model checkpoint (best)
+
+    logger.print("Load stage 1 model checkpoint (best)")
+
+    checkpoint_filename = "stage1_best_ckp.pth"
+    checkpoint_full_filename = os.path.join(results_dir, checkpoint_filename)
+
+    backbone, cls_head, ret_head = load_checkpoint(checkpoint_full_filename)
+
+    logger.print("  Loaded")
+
+    cls_model = models.BackboneAndHead(backbone, cls_head).to(first_device)
+    cls_model = torch.nn.DataParallel(cls_model, device_ids=list(range(len(device_idxs))))
+
+    ret_model = models.BackboneAndHead(backbone, ret_head).to(first_device)
+    ret_model = torch.nn.DataParallel(ret_model, device_ids=list(range(len(device_idxs))))
 
     ## Training settings
 
     optimizer = torch.optim.Adam(
-        model.parameters(),
+        chain(
+            backbone.parameters(),
+            cls_head.parameters(),
+            ret_head.parameters()
+        ),
         lr=1e-3,
     )
 
@@ -409,21 +517,11 @@ if __name__ == "__main__":
     train_data["settings"]["stage_2"]["max_epochs"] = 30
 
     best_tracker = utils.training.BestTracker()
-
-    ## Load stage 1 model checkpoint (best)
-
-    logger.print("Load stage 1 model checkpoint (best)")
-
-    checkpoint_filename = "stage1_best_ckp.pth"
-    checkpoint_full_filename = os.path.join(results_dir, checkpoint_filename)
-
-    model = load_checkpoint(checkpoint_full_filename)
-
-    logger.print("  Loaded")
     
     ## Begin training
 
-    model.module.unfreeze_backbone()
+    for param in backbone.parameters():
+        param.requires_grad = True
     
     while current_epoch < max_epoch:
 
@@ -434,32 +532,41 @@ if __name__ == "__main__":
         train_data["settings"]["stage_2"]["learning_rate_list"].append(scheduler.get_last_lr())
 
         start_time = time()
-        train_loss = train_epoch(train_loader) 
+        train_loss, task_train_loss_list = train_epoch(train_loader) 
         end_time = time()
+        train_epoch_time = end_time - start_time
 
-        train_data["results"]["stage_2"]["train_epoch_time_list"].append(end_time - start_time)
-
-        logger.print("  Train epoch time: {:s}".format(utils.time.sprint_fancy_time_diff(end_time - start_time)))
+        logger.print("  Train epoch time: {:s}".format(utils.time.sprint_fancy_time_diff(train_epoch_time)))
 
         start_time = time()
-        val_loss = eval_epoch(val_loader)
+        val_loss, task_val_loss_list = eval_epoch(val_loader)
         end_time = time()
+        val_epoch_time = end_time - start_time
 
-        train_data["results"]["stage_2"]["val_epoch_time_list"].append(end_time - start_time)
+        logger.print("  Val epoch time:   {:s}".format(utils.time.sprint_fancy_time_diff(val_epoch_time)))
 
-        logger.print("  Val epoch time:   {:s}".format(utils.time.sprint_fancy_time_diff(end_time - start_time)))
-
-        mean_train_loss = train_loss / len(ctsrbm_train_dataset)
-        mean_val_loss = val_loss / len(ctsrbm_val_dataset)
-
-        train_data["results"]["stage_2"]["mean_train_loss_list"].append(mean_train_loss)
-        train_data["results"]["stage_2"]["mean_val_loss_list"].append(mean_val_loss)
+        mean_train_loss = train_loss / len(mixed_train_dataset)
+        mean_val_loss = val_loss / len(mixed_val_dataset)
 
         logger.print("  Mean train loss: {:.2e}".format(mean_train_loss))
         logger.print("  Mean val loss:   {:.2e}".format(mean_val_loss))
             
         logger.print("  Current memory usage:")
         logger.print(utils.mem.sprint_memory_usage(device_idxs, num_spaces=4))
+
+        mean_cls_train_loss = task_train_loss_list[0] / len(ctsrbm_train_dataset)
+        mean_cls_val_loss = task_val_loss_list[0] / len(ctsrbm_train_dataset)
+        mean_ret_train_loss = task_train_loss_list[1] / len(capbm_train_dataset)
+        mean_ret_val_loss = task_val_loss_list[1] / len(capbm_train_dataset)
+
+        train_data["results"]["stage_2"]["mean_train_loss_list"].append(mean_train_loss)
+        train_data["results"]["stage_2"]["mean_val_loss_list"].append(mean_val_loss)
+        train_data["results"]["stage_2"]["mean_cls_train_loss_list"].append(mean_cls_train_loss)
+        train_data["results"]["stage_2"]["mean_cls_val_loss_list"].append(mean_cls_val_loss)
+        train_data["results"]["stage_2"]["mean_ret_train_loss_list"].append(mean_ret_train_loss)
+        train_data["results"]["stage_2"]["mean_ret_val_loss_list"].append(mean_ret_val_loss)
+        train_data["results"]["stage_2"]["train_epoch_time_list"].append(train_epoch_time)
+        train_data["results"]["stage_2"]["val_epoch_time_list"].append(val_epoch_time)
 
         if early_stopper.early_stop(mean_val_loss):
 
@@ -492,10 +599,17 @@ if __name__ == "__main__":
 
     logger.print("  Saved to " + checkpoint_full_filename)
 
-    # Final test
+    # Final test evaluation
 
-    test_loss = eval_epoch(test_loader)
-    train_data["test_loss"] = test_loss
+    test_loss, task_test_loss_list = eval_epoch(test_loader)
+
+    mean_test_loss = test_loss / len(mixed_train_dataset)
+    mean_cls_test_loss = task_test_loss_list[0] / len(ctsrbm_train_dataset)
+    mean_ret_test_loss = task_test_loss_list[1] / len(capbm_train_dataset)
+
+    train_data["mean_test_loss"] = mean_test_loss
+    train_data["mean_cls_test_loss"] = mean_cls_test_loss
+    train_data["mean_ret_test_loss"] = mean_ret_test_loss
 
     # Save training data
 

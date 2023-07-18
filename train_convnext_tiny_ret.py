@@ -123,7 +123,7 @@ if __name__ == "__main__":
 
     # Training settings
 
-    training_name_str = "resnet50_ret"
+    training_name_str = "convnext_tiny_ret"
     now_datetime_str = datetime.now().strftime("%d-%m-%Y--%H:%M:%S")
 
     results_dir = os.path.join(pathlib.Path.home(), "data", "fashion_retrieval", training_name_str + "_" + now_datetime_str)
@@ -170,7 +170,7 @@ if __name__ == "__main__":
 
     logger.print("Create datasets")
 
-    ctsrbm_image_transform = torchvision.models.ResNet50_Weights.DEFAULT.transforms()
+    ctsrbm_image_transform = torchvision.models.ConvNeXt_Tiny_Weights.DEFAULT.transforms()
     ctsrbm_image_transform.antialias = True
 
     ctsrbm_dataset_dir = os.path.join(pathlib.Path.home(), "data", "DeepFashion", "Consumer-to-shop Clothes Retrieval Benchmark")
@@ -212,12 +212,12 @@ if __name__ == "__main__":
 
     logger.print("Create model and training settings")
 
-    backbone = backbones.ResNet50Backbone()
+    backbone = backbones.ConvNeXTTinyBackbone()
     model = models.RetModel(backbone, 1024).to(first_device)
     model = torch.nn.DataParallel(model, device_ids=list(range(len(device_idxs))))
 
     train_data["settings"]["model"] = {
-        "backbone": "ResNet50Backbone",
+        "backbone": "ConvNeXTTinyBackbone",
         "heads": [
             "Image retrieval"
         ]

@@ -36,3 +36,35 @@ class EarlyStopper:
             if self.counter >= self.patience:
                 return True
         return False
+    
+
+class BestTracker:
+    """
+    Tracks best validation loss.
+    """
+
+    def __init__(self, min_delta=0):
+        """
+        :param min_delta: float, default=0
+            Minimum val loss reduction needed to count as improvement.
+        """
+        
+        self.min_delta = min_delta
+        self.min_val_loss = float("inf")
+
+
+    def is_best(self, val_loss):
+        """
+        Checks whether the last epoch had the best model.
+
+        :param val_loss: float
+            Last epoch val loss.
+
+        :return: bool
+            True iff the last epoch had the best model.
+        """
+
+        if val_loss < self.min_val_loss - self.min_delta:
+            self.min_val_loss = val_loss
+            return True
+        return False

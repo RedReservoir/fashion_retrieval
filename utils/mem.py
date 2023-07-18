@@ -1,6 +1,8 @@
 from pynvml import *
 nvmlInit()
 
+import torch
+
 
 
 def sprint_fancy_num_bytes(num_bytes):
@@ -53,7 +55,8 @@ def get_num_bytes(obj):
 
 def sprint_memory_usage(idxs, num_spaces=0):
     """
-    Generates a string showing GPU memoru usage with PyTorch and cuda.
+    Generates a string showing GPU memoru usage.
+    Implemented with PyTorch and cuda.
 
     :param idxs: list
         Indices of cuda devices, according to nvidia-smi.
@@ -66,21 +69,55 @@ def sprint_memory_usage(idxs, num_spaces=0):
     
     msgs = []
 
-    for idx in idxs:
+    for zidx, idx in enumerate(idxs):
 
         h = nvmlDeviceGetHandleByIndex(idx)
         info = nvmlDeviceGetMemoryInfo(h)
+        
+        gpu_name = torch.cuda.get_device_name(zidx)
         
         total_mem_str = sprint_fancy_num_bytes(info.total)
         used_mem_str = sprint_fancy_num_bytes(info.used)
         use_perc = info.used / info.total * 100
 
-        msgs.append((" " * num_spaces) + "Device ID {:2d}: {:s} / {:s} ({:6.2f}%)".format(
+        msgs.append((" " * num_spaces) + "Device ID {:2d}: {:s} / {:s} ({:6.2f}%) - {:s}".format(
             idx,
             used_mem_str,
             total_mem_str,
-            use_perc
+            use_perc,
+            gpu_name
         ))
 
     final_msg = "\n".join(msgs)
     return final_msg
+
+
+def list_gpu_data(idxs):
+    """
+    Generates a list of strings showing GPU names and their size.
+    Implemented with PyTorch and cuda.
+
+    :param idxs: list
+        Indices of cuda devices, according to nvidia-smi.
+
+    :return: list
+        List of dicts with GPU names and their sizes.
+    """
+    
+    gpu_data_list = []
+
+    for zidx, idx in enumerate(idxs):
+
+        h = nvmlDeviceGetHandleByIndex(idx)
+        info = nvmlDeviceGetMemoryInfo(h)
+        
+        gpu_data = {
+            "device_id": idx,
+            "device_name": torch.cuda.get_device_name(zidx),
+            "device_size": info.total,
+            "device_size_fancy": sprint_fancy_num_bytes(info.total)
+        }
+
+        gpu_data_list.append(gpu_data)
+
+    return gpu_data_list

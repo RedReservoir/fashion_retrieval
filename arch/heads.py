@@ -4,7 +4,14 @@ import torchvision
 
 
 class RetHead(torch.nn.Module):
+    """
+    Generic image retrieval embedding module.
 
+    :param in_feat_shape: tuple
+        3-tuple (C, H, W) with the input feature shape.
+    :param emb_size: int
+        Desired output embedding size.
+    """
 
     def __init__(self, in_feat_shape, emb_size):
         
@@ -30,6 +37,15 @@ class RetHead(torch.nn.Module):
 
 
 class ClsHead(torch.nn.Module):
+    """
+    Generic image classification module.
+
+    :param in_feat_shape: tuple
+        3-tuple (C, H, W) with the input feature shape.
+    :param num_classes: int
+        Number of classes.
+        Essentially the desired output embedding size.
+    """
 
 
     def __init__(self, in_feat_shape, num_classes):
