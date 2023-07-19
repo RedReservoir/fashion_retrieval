@@ -14,6 +14,7 @@ import random
 import utils.mem
 
 
+
 class Fusion(Dataset):
     """
     """
@@ -54,3 +55,29 @@ class Fusion(Dataset):
 
         dataset_idx, item_idx = self.fused_idxs[idx]
         return dataset_idx, self.datasets[dataset_idx][item_idx]
+
+
+    def collate_fn(original_batch):
+
+        new_batch = []
+
+        dataset_idxs = np.asarray([item[0] for item in original_batch])
+        unique_dataset_idxs = np.unique(dataset_idxs)
+
+        for dataset_idx in unique_dataset_idxs:
+
+            dataset_batch = []
+
+            dataset_items = [item[1] for item in original_batch if item[0] == dataset_idx]
+
+            for subitem_idx in range(len(dataset_items[0])):
+
+                dataset_subitems = [item[subitem_idx] for item in dataset_items]
+                if type(dataset_subitems[0]) == int:
+                    dataset_subitems = list(map(torch.tensor, dataset_subitems))
+
+                dataset_batch.append(torch.stack(dataset_subitems))
+
+            new_batch.append((dataset_idx, dataset_batch))
+
+        return new_batch

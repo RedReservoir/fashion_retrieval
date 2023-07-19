@@ -13,6 +13,7 @@ class RetHead(torch.nn.Module):
         Desired output embedding size.
     """
 
+
     def __init__(self, in_feat_shape, emb_size):
         
         super(RetHead, self).__init__()
@@ -54,7 +55,7 @@ class ClsHead(torch.nn.Module):
 
         self.cls_avgpool = torch.nn.AdaptiveAvgPool2d((1, 1))
         self.cls_linear = torch.nn.Linear(in_feat_shape[0], num_classes)
-        self.cls_smax = torch.nn.Softmax()
+        self.cls_smax = torch.nn.Softmax(dim=1)
 
 
     def forward(self, x):

@@ -1,3 +1,0 @@
-python train_resnet50_ret.py
-python train_efficientnet_b5_ret.py
-python train_convnext_tiny_ret.py

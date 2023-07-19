@@ -8,6 +8,7 @@ class ResNet50Backbone(torch.nn.Module):
     Standard ResNet50 feature backbone module.
     """
 
+
     def __init__(self):
         
         super(ResNet50Backbone, self).__init__()

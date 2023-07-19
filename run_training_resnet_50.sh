@@ -1,0 +1,2 @@
+python train_resnet50_ret.py
+python train_resnet50_cls_ret.py

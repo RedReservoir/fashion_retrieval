@@ -42,7 +42,7 @@ def load_checkpoint(filename):
     
     checkpoint = torch.load(filename)
 
-    backbone = backbones.ResNet50Backbone()
+    backbone = backbones.ConvNeXTTinyBackbone()
     cls_head = heads.ClsHead(backbone.out_shape, 50)
     ret_head = heads.RetHead(backbone.out_shape, 1024)
 
@@ -158,7 +158,7 @@ if __name__ == "__main__":
 
     # Training settings
 
-    training_name_str = "resnet50_cls_ret"
+    training_name_str = "convnext_tiny_cls_ret"
     now_datetime_str = datetime.now().strftime("%d-%m-%Y--%H:%M:%S")
 
     results_dir = os.path.join(pathlib.Path.home(), "data", "fashion_retrieval", training_name_str + "_" + now_datetime_str)
@@ -184,7 +184,7 @@ if __name__ == "__main__":
 
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 
-    device_idxs = [0]
+    device_idxs = [2]
     os.environ["CUDA_VISIBLE_DEVICES"] = ",".join([str(idx) for idx in device_idxs])
 
     first_device = torch.device("cuda:0")
@@ -205,7 +205,7 @@ if __name__ == "__main__":
 
     logger.print("Create datasets")
 
-    backbone_image_transform = torchvision.models.ResNet50_Weights.DEFAULT.transforms()
+    backbone_image_transform = torchvision.models.ConvNeXt_Tiny_Weights.DEFAULT.transforms()
     backbone_image_transform.antialias = True
 
     capbm_dataset_dir = os.path.join(pathlib.Path.home(), "data", "DeepFashion", "Category and Attribute Prediction Benchmark")
@@ -265,7 +265,7 @@ if __name__ == "__main__":
 
     logger.print("Create model and training settings")
 
-    backbone = backbones.ResNet50Backbone().to(first_device)
+    backbone = backbones.ConvNeXTTinyBackbone().to(first_device)
     
     cls_head = heads.ClsHead(backbone.out_shape, 50).to(first_device)
     ret_head = heads.RetHead(backbone.out_shape, 1024).to(first_device)
@@ -277,7 +277,7 @@ if __name__ == "__main__":
     if len(device_idxs) > 1: ret_model = torch.nn.DataParallel(ret_model, device_ids=list(range(len(device_idxs))))
 
     train_data["settings"]["model"] = {
-        "backbone": "ResNet50Backbone",
+        "backbone": "ConvNeXTTinyBackbone",
         "heads": [
             "RetHead",
             "ClsHead"
@@ -353,11 +353,9 @@ if __name__ == "__main__":
     
     ## Begin training
 
-    """
     for param in backbone.parameters():
         param.requires_grad = False
-    """
-        
+
     while current_epoch < max_epoch:
 
         current_epoch += 1

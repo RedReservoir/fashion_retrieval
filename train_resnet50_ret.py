@@ -20,6 +20,9 @@ import utils.mem, utils.list, utils.training, utils.time, utils.log
 from time import time
 from datetime import datetime
 
+from itertools import chain
+from functools import reduce
+
 
 ########
 
@@ -27,7 +30,8 @@ from datetime import datetime
 def save_checkpoint(filename):
 
     checkpoint = {
-        "model_state_dict": model.module.state_dict()
+        "backbone_state_dict": backbone.state_dict(),
+        "ret_head_state_dict": ret_head.state_dict()
         }
 
     torch.save(checkpoint, filename)
@@ -37,15 +41,13 @@ def load_checkpoint(filename):
     
     checkpoint = torch.load(filename)
 
-    # Loading model
+    backbone = backbones.ResNet50Backbone().to(first_device)
+    ret_head = heads.RetHead(backbone.out_shape, 1024).to(first_device)
 
-    backbone = backbones.ResNet50Backbone()
+    backbone.load_state_dict(checkpoint["backbone_state_dict"])
+    ret_head.load_state_dict(checkpoint["ret_head_state_dict"])
 
-    model = models.RetModel(backbone, 1024).to(first_device)
-    model = torch.nn.DataParallel(model, device_ids=list(range(len(device_idxs))))
-    model.module.load_state_dict(checkpoint["model_state_dict"])
-
-    return model
+    return backbone, ret_head
 
 
 def save_train_data(filename):
@@ -56,40 +58,32 @@ def save_train_data(filename):
 
 def train_epoch(data_loader, with_tqdm=True):
 
-    model.train()
-    total_loss = 0
+    backbone.train()
+    ret_head.train()
+
+    total_loss_item = 0
 
     loader_gen = data_loader
     if with_tqdm: loader_gen = tqdm(loader_gen)
 
     for batch in loader_gen:
 
-        anc_imgs = batch[0]
-        pos_imgs = batch[1]
-        neg_imgs = batch[2]
+        batch_loss = batch_evaluation(batch)
+        total_loss_item += batch_loss.item()
 
-        with torch.cuda.amp.autocast():
-
-            anc_emb = model(anc_imgs)
-            pos_emb = model(pos_imgs)
-            neg_emb = model(neg_imgs)
-            
-            triplet_loss = torch.nn.TripletMarginLoss()
-            loss = triplet_loss(anc_emb, pos_emb, neg_emb)
-
-        total_loss += loss.item()
-
-        scaler.scale(loss).backward()
+        scaler.scale(batch_loss).backward()
         scaler.step(optimizer)
         scaler.update()
 
-    return total_loss
+    return total_loss_item
 
 
 def eval_epoch(data_loader, with_tqdm=True):
 
-    model.eval()
-    total_loss = 0
+    backbone.train()
+    ret_head.train()
+    
+    total_loss_item = 0
 
     with torch.no_grad():
 
@@ -98,22 +92,28 @@ def eval_epoch(data_loader, with_tqdm=True):
 
         for batch in loader_gen:
 
-            anc_imgs = batch[0]
-            pos_imgs = batch[1]
-            neg_imgs = batch[2]
+            batch_loss = batch_evaluation(batch)
+            total_loss_item += batch_loss.item()
 
-            with torch.cuda.amp.autocast():
+    return total_loss_item
 
-                anc_emb = model(anc_imgs)
-                pos_emb = model(pos_imgs)
-                neg_emb = model(neg_imgs)
 
-                triplet_loss = torch.nn.TripletMarginLoss()
-                loss = triplet_loss(anc_emb, pos_emb, neg_emb)
+def batch_evaluation(batch):
 
-            total_loss += loss.item()
+    anc_imgs = batch[0].to(device)
+    pos_imgs = batch[1].to(device)
+    neg_imgs = batch[2].to(device)
 
-    return total_loss
+    with torch.cuda.amp.autocast():
+
+        anc_emb = ret_model(anc_imgs)
+        pos_emb = ret_model(pos_imgs)
+        neg_emb = ret_model(neg_imgs)
+
+        triplet_loss = torch.nn.TripletMarginLoss()
+        batch_loss = triplet_loss(anc_emb, pos_emb, neg_emb)
+
+    return batch_loss
 
 
 ########
@@ -149,7 +149,7 @@ if __name__ == "__main__":
 
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 
-    device_idxs = [3, 4, 5, 6]
+    device_idxs = [0]
     os.environ["CUDA_VISIBLE_DEVICES"] = ",".join([str(idx) for idx in device_idxs])
 
     first_device = torch.device("cuda:0")
@@ -170,20 +170,23 @@ if __name__ == "__main__":
 
     logger.print("Create datasets")
 
-    ctsrbm_image_transform = torchvision.models.ResNet50_Weights.DEFAULT.transforms()
-    ctsrbm_image_transform.antialias = True
+    backbone_image_transform = torchvision.models.ResNet50_Weights.DEFAULT.transforms()
+    backbone_image_transform.antialias = True
 
     ctsrbm_dataset_dir = os.path.join(pathlib.Path.home(), "data", "DeepFashion", "Consumer-to-shop Clothes Retrieval Benchmark")
 
-    ctsrbm_dataset = deep_fashion.ConsToShopClothRetrBM(ctsrbm_dataset_dir, ctsrbm_image_transform)
+    ctsrbm_dataset = deep_fashion.ConsToShopClothRetrBM(ctsrbm_dataset_dir, backbone_image_transform)
 
     cutdown_ratio = 1
 
     if cutdown_ratio == 1:
+
         ctsrbm_train_dataset = Subset(ctsrbm_dataset, ctsrbm_dataset.get_split_mask_idxs("train"))
         ctsrbm_test_dataset = Subset(ctsrbm_dataset, ctsrbm_dataset.get_split_mask_idxs("test"))
         ctsrbm_val_dataset = Subset(ctsrbm_dataset, ctsrbm_dataset.get_split_mask_idxs("val"))
+
     else:
+
         ctsrbm_train_dataset = Subset(ctsrbm_dataset, utils.list.cutdown_list(ctsrbm_dataset.get_split_mask_idxs("train"), cutdown_ratio))
         ctsrbm_test_dataset = Subset(ctsrbm_dataset, utils.list.cutdown_list(ctsrbm_dataset.get_split_mask_idxs("test"), cutdown_ratio))
         ctsrbm_val_dataset = Subset(ctsrbm_dataset, utils.list.cutdown_list(ctsrbm_dataset.get_split_mask_idxs("val"), cutdown_ratio))
@@ -196,8 +199,8 @@ if __name__ == "__main__":
 
     logger.print("Create data loaders")
 
-    batch_size = 256
-    num_workers = 16
+    batch_size = 32
+    num_workers = 8
 
     train_loader = DataLoader(ctsrbm_train_dataset, batch_size=batch_size, num_workers=num_workers)
     test_loader = DataLoader(ctsrbm_test_dataset, batch_size=batch_size, num_workers=num_workers)
@@ -212,14 +215,17 @@ if __name__ == "__main__":
 
     logger.print("Create model and training settings")
 
-    backbone = backbones.ResNet50Backbone()
-    model = models.RetModel(backbone, 1024).to(first_device)
-    model = torch.nn.DataParallel(model, device_ids=list(range(len(device_idxs))))
+    backbone = backbones.ResNet50Backbone().to(first_device)
+    
+    ret_head = heads.RetHead(backbone.out_shape, 1024).to(first_device)
+
+    ret_model = models.BackboneAndHead(backbone, ret_head).to(first_device)
+    if len(device_idxs) > 1: ret_model = torch.nn.DataParallel(ret_model, device_ids=list(range(len(device_idxs))))
 
     train_data["settings"]["model"] = {
         "backbone": "ResNet50Backbone",
         "heads": [
-            "Image retrieval"
+            "RetHead"
         ]
     }
 
@@ -244,13 +250,16 @@ if __name__ == "__main__":
     ## Training settings
 
     optimizer = torch.optim.Adam(
-        model.parameters(),
+        chain(
+            backbone.parameters(),
+            ret_head.parameters()
+        ),
         lr=1e-3,
     )
 
     train_data["settings"]["stage_1"]["optimizer"] = {
-        "method": "Adam",
-        "learning_rate": 1e-3
+        "class": "",
+        "lr": 1e-3
     }
 
     scheduler = torch.optim.lr_scheduler.ExponentialLR(
@@ -259,7 +268,7 @@ if __name__ == "__main__":
     )
 
     train_data["settings"]["stage_1"]["scheduler"] = {
-        "method": "ExponentialLR",
+        "class": "ExponentialLR",
         "gamma": 0.95
     }
 
@@ -284,8 +293,9 @@ if __name__ == "__main__":
     
     ## Begin training
 
-    model.module.freeze_backbone()
-
+    for param in backbone.parameters():
+        param.requires_grad = False
+        
     while current_epoch < max_epoch:
 
         current_epoch += 1
@@ -297,30 +307,30 @@ if __name__ == "__main__":
         start_time = time()
         train_loss = train_epoch(train_loader) 
         end_time = time()
+        train_epoch_time = end_time - start_time
 
-        train_data["results"]["stage_1"]["train_epoch_time_list"].append(end_time - start_time)
-
-        logger.print("  Train epoch time: {:s}".format(utils.time.sprint_fancy_time_diff(end_time - start_time)))
+        logger.print("  Train epoch time: {:s}".format(utils.time.sprint_fancy_time_diff(train_epoch_time)))
 
         start_time = time()
         val_loss = eval_epoch(val_loader)
         end_time = time()
+        val_epoch_time = end_time - start_time
 
-        train_data["results"]["stage_1"]["val_epoch_time_list"].append(end_time - start_time)
-
-        logger.print("  Val epoch time:   {:s}".format(utils.time.sprint_fancy_time_diff(end_time - start_time)))
+        logger.print("  Val epoch time:   {:s}".format(utils.time.sprint_fancy_time_diff(val_epoch_time)))
 
         mean_train_loss = train_loss / len(ctsrbm_train_dataset)
         mean_val_loss = val_loss / len(ctsrbm_val_dataset)
-
-        train_data["results"]["stage_1"]["mean_train_loss_list"].append(mean_train_loss)
-        train_data["results"]["stage_1"]["mean_val_loss_list"].append(mean_val_loss)
 
         logger.print("  Mean train loss: {:.2e}".format(mean_train_loss))
         logger.print("  Mean val loss:   {:.2e}".format(mean_val_loss))
             
         logger.print("  Current memory usage:")
         logger.print(utils.mem.sprint_memory_usage(device_idxs, num_spaces=4))
+
+        train_data["results"]["stage_1"]["mean_train_loss_list"].append(mean_train_loss)
+        train_data["results"]["stage_1"]["mean_val_loss_list"].append(mean_val_loss)
+        train_data["results"]["stage_1"]["train_epoch_time_list"].append(train_epoch_time)
+        train_data["results"]["stage_1"]["val_epoch_time_list"].append(val_epoch_time)
 
         if early_stopper.early_stop(mean_val_loss):
 
@@ -369,17 +379,34 @@ if __name__ == "__main__":
     train_data["results"]["stage_2"]["mean_val_loss_list"] = []
     train_data["results"]["stage_2"]["train_epoch_time_list"] = []
     train_data["results"]["stage_2"]["val_epoch_time_list"] = []
+    
+    ## Load stage 1 model checkpoint (best)
+
+    logger.print("Load stage 1 model checkpoint (best)")
+
+    checkpoint_filename = "stage1_best_ckp.pth"
+    checkpoint_full_filename = os.path.join(results_dir, checkpoint_filename)
+
+    backbone, ret_head = load_checkpoint(checkpoint_full_filename)
+
+    logger.print("  Loaded")
+
+    ret_model = models.BackboneAndHead(backbone, ret_head).to(first_device)
+    if len(device_idxs) > 1: ret_model = torch.nn.DataParallel(ret_model, device_ids=list(range(len(device_idxs))))
 
     ## Training settings
 
     optimizer = torch.optim.Adam(
-        model.parameters(),
-        lr=1e-3,
+        chain(
+            backbone.parameters(),
+            ret_head.parameters()
+        ),
+        lr=5e-5
     )
 
     train_data["settings"]["stage_2"]["optimizer"] = {
-        "method": "Adam",
-        "learning_rate": 1e-3
+        "class": "Adam",
+        "lr": 5e-5
     }
 
     scheduler = torch.optim.lr_scheduler.ExponentialLR(
@@ -388,7 +415,7 @@ if __name__ == "__main__":
     )
 
     train_data["settings"]["stage_2"]["scheduler"] = {
-        "method": "ExponentialLR",
+        "class": "ExponentialLR",
         "gamma": 0.95
     }
 
@@ -409,22 +436,12 @@ if __name__ == "__main__":
     train_data["settings"]["stage_2"]["max_epochs"] = 30
 
     best_tracker = utils.training.BestTracker()
-
-    ## Load stage 1 model checkpoint (best)
-
-    logger.print("Load stage 1 model checkpoint (best)")
-
-    checkpoint_filename = "stage1_best_ckp.pth"
-    checkpoint_full_filename = os.path.join(results_dir, checkpoint_filename)
-
-    model = load_checkpoint(checkpoint_full_filename)
-
-    logger.print("  Loaded")
     
     ## Begin training
 
-    model.module.unfreeze_backbone()
-    
+    for param in backbone.parameters():
+        param.requires_grad = True
+
     while current_epoch < max_epoch:
 
         current_epoch += 1
@@ -436,30 +453,30 @@ if __name__ == "__main__":
         start_time = time()
         train_loss = train_epoch(train_loader) 
         end_time = time()
+        train_epoch_time = end_time - start_time
 
-        train_data["results"]["stage_2"]["train_epoch_time_list"].append(end_time - start_time)
-
-        logger.print("  Train epoch time: {:s}".format(utils.time.sprint_fancy_time_diff(end_time - start_time)))
+        logger.print("  Train epoch time: {:s}".format(utils.time.sprint_fancy_time_diff(train_epoch_time)))
 
         start_time = time()
         val_loss = eval_epoch(val_loader)
         end_time = time()
+        val_epoch_time = end_time - start_time
 
-        train_data["results"]["stage_2"]["val_epoch_time_list"].append(end_time - start_time)
-
-        logger.print("  Val epoch time:   {:s}".format(utils.time.sprint_fancy_time_diff(end_time - start_time)))
+        logger.print("  Val epoch time:   {:s}".format(utils.time.sprint_fancy_time_diff(val_epoch_time)))
 
         mean_train_loss = train_loss / len(ctsrbm_train_dataset)
         mean_val_loss = val_loss / len(ctsrbm_val_dataset)
-
-        train_data["results"]["stage_2"]["mean_train_loss_list"].append(mean_train_loss)
-        train_data["results"]["stage_2"]["mean_val_loss_list"].append(mean_val_loss)
 
         logger.print("  Mean train loss: {:.2e}".format(mean_train_loss))
         logger.print("  Mean val loss:   {:.2e}".format(mean_val_loss))
             
         logger.print("  Current memory usage:")
         logger.print(utils.mem.sprint_memory_usage(device_idxs, num_spaces=4))
+
+        train_data["results"]["stage_2"]["mean_train_loss_list"].append(mean_train_loss)
+        train_data["results"]["stage_2"]["mean_val_loss_list"].append(mean_val_loss)
+        train_data["results"]["stage_2"]["train_epoch_time_list"].append(train_epoch_time)
+        train_data["results"]["stage_2"]["val_epoch_time_list"].append(val_epoch_time)
 
         if early_stopper.early_stop(mean_val_loss):
 
@@ -492,10 +509,17 @@ if __name__ == "__main__":
 
     logger.print("  Saved to " + checkpoint_full_filename)
 
-    # Final test
+    # Final test evaluation
+
+    logger.print("Final test evaluation")
 
     test_loss = eval_epoch(test_loader)
-    train_data["test_loss"] = test_loss
+
+    mean_test_loss = test_loss / len(ctsrbm_train_dataset)
+
+    logger.print("  Mean test loss: {:.2e}".format(mean_test_loss))
+
+    train_data["mean_test_loss"] = mean_test_loss
 
     # Save training data
 
