@@ -1,2 +1,0 @@
-python train_convnext_tiny_ret.py
-python train_convnext_tiny_cls_ret.py

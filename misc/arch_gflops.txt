@@ -1,0 +1,17 @@
+RESNET18                1.81
+RESNET34                3.66
+RESNET50                4.09
+RESNET101               7.80
+RESNET152               11.51
+EFFICIENTNET_B0         0.39
+EFFICIENTNET_B1         0.69
+EFFICIENTNET_B2         1.09
+EFFICIENTNET_B3         1.83
+EFFICIENTNET_B4         4.39
+EFFICIENTNET_B5         10.27
+EFFICIENTNET_B6         19.07
+EFFICIENTNET_B7         37.75
+CONVNEXT_TINY           4.46
+CONVNEXT_SMALL          8.68
+CONVNEXT_BASE           15.36
+CONVNEXT_LARGE          34.36

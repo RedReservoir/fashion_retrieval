@@ -1,0 +1,45 @@
+{
+    "experiment_name": "efficientnet_b4_ret_test_008",
+    "settings": {
+        "device_idxs": [0],
+        "data_loading": {
+            "batch_size": 16,
+            "num_workers": 4
+        },
+        "backbone": {
+            "class": "EfficientNetB4Backbone" 
+        },
+        "stage_1": {
+            "max_epochs": 1,
+            "optimizer": {
+                "class": "SGD",
+                "lr": 1e-3,
+                "momentum": 0.9
+            },
+            "scheduler": {
+                "class": "ExponentialLR",
+                "gamma": 0.95
+            },
+            "early_stopper": {
+                "patience": 5,
+                "min_delta": 0
+            }
+        },
+        "stage_2": {
+            "max_epochs": 1,
+            "optimizer": {
+                "class": "SGD",
+                "lr": 5e-4,
+                "momentum": 0.9
+            },
+            "scheduler": {
+                "class": "ExponentialLR",
+                "gamma": 0.95
+            },
+            "early_stopper": {
+                "patience": 5,
+                "min_delta": 0
+            }
+        }
+    }
+}

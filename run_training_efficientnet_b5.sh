@@ -1,2 +1,0 @@
-python train_efficientnet_b5_ret.py
-python train_efficientnet_b5_cls_ret.py

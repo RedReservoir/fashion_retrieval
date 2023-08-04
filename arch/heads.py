@@ -20,7 +20,7 @@ class RetHead(torch.nn.Module):
 
         self.ret_conv1x1 = self.conv1x1(in_feat_shape[0], emb_size)
         self.cls_avgpool = torch.nn.AdaptiveAvgPool2d((1, 1))
-
+        
 
     def forward(self, x):
         

@@ -29,7 +29,7 @@ class Logger:
 
             if type(out_stream) == str:
                 
-                out_stream = open(out_stream, 'w')
+                out_stream = open(out_stream, "a+")
                 self.out_streams.append(out_stream)
                 
             else:
@@ -47,4 +47,15 @@ class Logger:
 
             kwargs["file"] = out_stream
             print(*args, **kwargs)
+            out_stream.flush()
+
+
+    def flush(self):
+        """
+        Flushes out all out streams.
+        """
+        
+        for out_stream in self.out_streams:
+
+            out_stream.flush()
             

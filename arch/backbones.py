@@ -49,13 +49,351 @@ class ResNet50Backbone(torch.nn.Module):
     
 
 
+class EfficientNetB3Backbone(torch.nn.Module):
+    """
+    Standard EfficientNet-B3 feature backbone module.
+    """
+
+
+    def __init__(
+            self,
+            batchnorm_momentum=None,
+            batchnorm_track_runnning_stats=None
+            ):
+        
+        super(EfficientNetB3Backbone, self).__init__()
+
+        # Model construction
+
+        weights = torchvision.models.EfficientNet_B3_Weights.DEFAULT
+        net = torchvision.models.efficientnet_b3(weights=weights)
+        
+        self.features = net.features
+
+        # BatchNorm mods
+
+        batchnorm_layers_list = self._compute_batchnorm_layers_list()
+            
+        if batchnorm_momentum is not None:
+            for layer in batchnorm_layers_list:
+                layer.momentum = batchnorm_momentum
+            
+        if batchnorm_track_runnning_stats is not None:
+            for layer in batchnorm_layers_list:
+                layer.track_running_stats = batchnorm_track_runnning_stats
+
+        # Other parameters
+
+        self.out_shape = (1536, 10, 10)
+
+
+    def forward(self, x):
+        
+        x = self.features(x)
+
+        return x
+
+
+    def _compute_batchnorm_layers_list(self):
+
+        batchnorm_layers_list = []
+
+        batchnorm_layers_list += [
+            self.features[0][1]
+        ]
+
+        batchnorm_layers_list += [
+            self.features[1][0].block[0][1],
+            self.features[1][0].block[2][1],
+            self.features[1][1].block[0][1],
+            self.features[1][1].block[2][1]
+        ]
+    
+        batchnorm_layers_list += [
+            self.features[2][0].block[0][1],
+            self.features[2][0].block[1][1],
+            self.features[2][0].block[3][1],
+            self.features[2][1].block[0][1],
+            self.features[2][1].block[1][1],
+            self.features[2][1].block[3][1],
+            self.features[2][2].block[0][1],
+            self.features[2][2].block[1][1],
+            self.features[2][2].block[3][1]
+        ]
+
+        batchnorm_layers_list += [
+            self.features[3][0].block[0][1],
+            self.features[3][0].block[1][1],
+            self.features[3][0].block[3][1],
+            self.features[3][1].block[0][1],
+            self.features[3][1].block[1][1],
+            self.features[3][1].block[3][1],
+            self.features[3][2].block[0][1],
+            self.features[3][2].block[1][1],
+            self.features[3][2].block[3][1]
+        ]
+
+        batchnorm_layers_list += [
+            self.features[4][0].block[0][1],
+            self.features[4][0].block[1][1],
+            self.features[4][0].block[3][1],
+            self.features[4][1].block[0][1],
+            self.features[4][1].block[1][1],
+            self.features[4][1].block[3][1],
+            self.features[4][2].block[0][1],
+            self.features[4][2].block[1][1],
+            self.features[4][2].block[3][1],
+            self.features[4][3].block[0][1],
+            self.features[4][3].block[1][1],
+            self.features[4][3].block[3][1],
+            self.features[4][4].block[0][1],
+            self.features[4][4].block[1][1],
+            self.features[4][4].block[3][1]
+        ]
+
+        batchnorm_layers_list += [
+            self.features[5][0].block[0][1],
+            self.features[5][0].block[1][1],
+            self.features[5][0].block[3][1],
+            self.features[5][1].block[0][1],
+            self.features[5][1].block[1][1],
+            self.features[5][1].block[3][1],
+            self.features[5][2].block[0][1],
+            self.features[5][2].block[1][1],
+            self.features[5][2].block[3][1],
+            self.features[5][3].block[0][1],
+            self.features[5][3].block[1][1],
+            self.features[5][3].block[3][1],
+            self.features[5][4].block[0][1],
+            self.features[5][4].block[1][1],
+            self.features[5][4].block[3][1]
+        ]
+
+        batchnorm_layers_list += [
+            self.features[6][0].block[0][1],
+            self.features[6][0].block[1][1],
+            self.features[6][0].block[3][1],
+            self.features[6][1].block[0][1],
+            self.features[6][1].block[1][1],
+            self.features[6][1].block[3][1],
+            self.features[6][2].block[0][1],
+            self.features[6][2].block[1][1],
+            self.features[6][2].block[3][1],
+            self.features[6][3].block[0][1],
+            self.features[6][3].block[1][1],
+            self.features[6][3].block[3][1],
+            self.features[6][4].block[0][1],
+            self.features[6][4].block[1][1],
+            self.features[6][4].block[3][1],
+            self.features[6][5].block[0][1],
+            self.features[6][5].block[1][1],
+            self.features[6][5].block[3][1]
+        ]
+
+        batchnorm_layers_list += [
+            self.features[7][0].block[0][1],
+            self.features[7][0].block[1][1],
+            self.features[7][0].block[3][1],
+            self.features[7][1].block[0][1],
+            self.features[7][1].block[1][1],
+            self.features[7][1].block[3][1]
+        ]
+
+        batchnorm_layers_list += [
+            self.features[8][1]
+        ]
+
+        return batchnorm_layers_list
+    
+
+    
+class EfficientNetB4Backbone(torch.nn.Module):
+    """
+    Standard EfficientNet-B4 feature backbone module.
+    """
+
+
+    def __init__(
+            self,
+            batchnorm_momentum=None,
+            batchnorm_track_runnning_stats=None
+            ):
+                
+        super(EfficientNetB4Backbone, self).__init__()
+
+        # Model construction
+
+        weights = torchvision.models.EfficientNet_B4_Weights.DEFAULT
+        net = torchvision.models.efficientnet_b4(weights=weights)
+        
+        self.features = net.features
+
+        # BatchNorm mods
+
+        batchnorm_layers_list = self._compute_batchnorm_layers_list()
+            
+        if batchnorm_momentum is not None:
+            for layer in batchnorm_layers_list:
+                layer.momentum = batchnorm_momentum
+            
+        if batchnorm_track_runnning_stats is not None:
+            for layer in batchnorm_layers_list:
+                layer.track_running_stats = batchnorm_track_runnning_stats
+
+        # Other parameters
+
+        self.out_shape = (1792, 12, 12)
+
+
+    def forward(self, x):
+        
+        x = self.features(x)
+
+        return x
+
+
+    def _compute_batchnorm_layers_list(self):
+
+        batchnorm_layers_list = []
+
+        batchnorm_layers_list += [
+            self.features[0][1]
+        ]
+
+        batchnorm_layers_list += [
+            self.features[1][0].block[0][1],
+            self.features[1][0].block[2][1],
+            self.features[1][1].block[0][1],
+            self.features[1][1].block[2][1]
+        ]
+    
+        batchnorm_layers_list += [
+            self.features[2][0].block[0][1],
+            self.features[2][0].block[1][1],
+            self.features[2][0].block[3][1],
+            self.features[2][1].block[0][1],
+            self.features[2][1].block[1][1],
+            self.features[2][1].block[3][1],
+            self.features[2][2].block[0][1],
+            self.features[2][2].block[1][1],
+            self.features[2][2].block[3][1],
+            self.features[2][3].block[0][1],
+            self.features[2][3].block[1][1],
+            self.features[2][3].block[3][1]
+        ]
+    
+        batchnorm_layers_list += [
+            self.features[3][0].block[0][1],
+            self.features[3][0].block[1][1],
+            self.features[3][0].block[3][1],
+            self.features[3][1].block[0][1],
+            self.features[3][1].block[1][1],
+            self.features[3][1].block[3][1],
+            self.features[3][2].block[0][1],
+            self.features[3][2].block[1][1],
+            self.features[3][2].block[3][1],
+            self.features[3][3].block[0][1],
+            self.features[3][3].block[1][1],
+            self.features[3][3].block[3][1]
+        ]
+
+        batchnorm_layers_list += [
+            self.features[4][0].block[0][1],
+            self.features[4][0].block[1][1],
+            self.features[4][0].block[3][1],
+            self.features[4][1].block[0][1],
+            self.features[4][1].block[1][1],
+            self.features[4][1].block[3][1],
+            self.features[4][2].block[0][1],
+            self.features[4][2].block[1][1],
+            self.features[4][2].block[3][1],
+            self.features[4][3].block[0][1],
+            self.features[4][3].block[1][1],
+            self.features[4][3].block[3][1],
+            self.features[4][4].block[0][1],
+            self.features[4][4].block[1][1],
+            self.features[4][4].block[3][1],
+            self.features[4][5].block[0][1],
+            self.features[4][5].block[1][1],
+            self.features[4][5].block[3][1]
+        ]
+
+        batchnorm_layers_list += [
+            self.features[5][0].block[0][1],
+            self.features[5][0].block[1][1],
+            self.features[5][0].block[3][1],
+            self.features[5][1].block[0][1],
+            self.features[5][1].block[1][1],
+            self.features[5][1].block[3][1],
+            self.features[5][2].block[0][1],
+            self.features[5][2].block[1][1],
+            self.features[5][2].block[3][1],
+            self.features[5][3].block[0][1],
+            self.features[5][3].block[1][1],
+            self.features[5][3].block[3][1],
+            self.features[5][4].block[0][1],
+            self.features[5][4].block[1][1],
+            self.features[5][4].block[3][1],
+            self.features[5][5].block[0][1],
+            self.features[5][5].block[1][1],
+            self.features[5][5].block[3][1]
+        ]
+
+        batchnorm_layers_list += [
+            self.features[6][0].block[0][1],
+            self.features[6][0].block[1][1],
+            self.features[6][0].block[3][1],
+            self.features[6][1].block[0][1],
+            self.features[6][1].block[1][1],
+            self.features[6][1].block[3][1],
+            self.features[6][2].block[0][1],
+            self.features[6][2].block[1][1],
+            self.features[6][2].block[3][1],
+            self.features[6][3].block[0][1],
+            self.features[6][3].block[1][1],
+            self.features[6][3].block[3][1],
+            self.features[6][4].block[0][1],
+            self.features[6][4].block[1][1],
+            self.features[6][4].block[3][1],
+            self.features[6][5].block[0][1],
+            self.features[6][5].block[1][1],
+            self.features[6][5].block[3][1],
+            self.features[6][6].block[0][1],
+            self.features[6][6].block[1][1],
+            self.features[6][6].block[3][1],
+            self.features[6][7].block[0][1],
+            self.features[6][7].block[1][1],
+            self.features[6][7].block[3][1]
+        ]
+
+        batchnorm_layers_list += [
+            self.features[7][0].block[0][1],
+            self.features[7][0].block[1][1],
+            self.features[7][0].block[3][1],
+            self.features[7][1].block[0][1],
+            self.features[7][1].block[1][1],
+            self.features[7][1].block[3][1]
+        ]
+
+        batchnorm_layers_list += [
+            self.features[8][1]
+        ]
+
+        return batchnorm_layers_list
+
+
+
 class EfficientNetB5Backbone(torch.nn.Module):
     """
-    Standard EfficientNet B5 feature backbone module.
+    Standard EfficientNet-B5 feature backbone module.
     """
 
 
-    def __init__(self):
+    def __init__(
+            self,
+            batchnorm_momentum=None,
+            batchnorm_track_runnning_stats=None
+            ):
         
         super(EfficientNetB5Backbone, self).__init__()
 
@@ -65,6 +403,18 @@ class EfficientNetB5Backbone(torch.nn.Module):
         net = torchvision.models.efficientnet_b5(weights=weights)
         
         self.features = net.features
+
+        # BatchNorm mods
+
+        batchnorm_layers_list = self._compute_batchnorm_layers_list()
+            
+        if batchnorm_momentum is not None:
+            for layer in batchnorm_layers_list:
+                layer.momentum = batchnorm_momentum
+            
+        if batchnorm_track_runnning_stats is not None:
+            for layer in batchnorm_layers_list:
+                layer.track_running_stats = batchnorm_track_runnning_stats
 
         # Other parameters
 
@@ -78,16 +428,166 @@ class EfficientNetB5Backbone(torch.nn.Module):
         return x
 
 
+    def _compute_batchnorm_layers_list(self):
 
-class ConvNeXTTinyBackbone(torch.nn.Module):
+        batchnorm_layers_list = []
+
+        batchnorm_layers_list += [
+            self.features[0][1]
+        ]
+
+        batchnorm_layers_list += [
+            self.features[1][0].block[0][1],
+            self.features[1][0].block[2][1],
+            self.features[1][1].block[0][1],
+            self.features[1][1].block[2][1],
+            self.features[1][2].block[0][1],
+            self.features[1][2].block[2][1]
+        ]
+    
+        batchnorm_layers_list += [
+            self.features[2][0].block[0][1],
+            self.features[2][0].block[1][1],
+            self.features[2][0].block[3][1],
+            self.features[2][1].block[0][1],
+            self.features[2][1].block[1][1],
+            self.features[2][1].block[3][1],
+            self.features[2][2].block[0][1],
+            self.features[2][2].block[1][1],
+            self.features[2][2].block[3][1],
+            self.features[2][3].block[0][1],
+            self.features[2][3].block[1][1],
+            self.features[2][3].block[3][1],
+            self.features[2][4].block[0][1],
+            self.features[2][4].block[1][1],
+            self.features[2][4].block[3][1]
+        ]
+    
+        batchnorm_layers_list += [
+            self.features[3][0].block[0][1],
+            self.features[3][0].block[1][1],
+            self.features[3][0].block[3][1],
+            self.features[3][1].block[0][1],
+            self.features[3][1].block[1][1],
+            self.features[3][1].block[3][1],
+            self.features[3][2].block[0][1],
+            self.features[3][2].block[1][1],
+            self.features[3][2].block[3][1],
+            self.features[3][3].block[0][1],
+            self.features[3][3].block[1][1],
+            self.features[3][3].block[3][1],
+            self.features[3][4].block[0][1],
+            self.features[3][4].block[1][1],
+            self.features[3][4].block[3][1]
+        ]
+
+        batchnorm_layers_list += [
+            self.features[4][0].block[0][1],
+            self.features[4][0].block[1][1],
+            self.features[4][0].block[3][1],
+            self.features[4][1].block[0][1],
+            self.features[4][1].block[1][1],
+            self.features[4][1].block[3][1],
+            self.features[4][2].block[0][1],
+            self.features[4][2].block[1][1],
+            self.features[4][2].block[3][1],
+            self.features[4][3].block[0][1],
+            self.features[4][3].block[1][1],
+            self.features[4][3].block[3][1],
+            self.features[4][4].block[0][1],
+            self.features[4][4].block[1][1],
+            self.features[4][4].block[3][1],
+            self.features[4][5].block[0][1],
+            self.features[4][5].block[1][1],
+            self.features[4][5].block[3][1],
+            self.features[4][6].block[0][1],
+            self.features[4][6].block[1][1],
+            self.features[4][6].block[3][1]
+        ]
+
+        batchnorm_layers_list += [
+            self.features[5][0].block[0][1],
+            self.features[5][0].block[1][1],
+            self.features[5][0].block[3][1],
+            self.features[5][1].block[0][1],
+            self.features[5][1].block[1][1],
+            self.features[5][1].block[3][1],
+            self.features[5][2].block[0][1],
+            self.features[5][2].block[1][1],
+            self.features[5][2].block[3][1],
+            self.features[5][3].block[0][1],
+            self.features[5][3].block[1][1],
+            self.features[5][3].block[3][1],
+            self.features[5][4].block[0][1],
+            self.features[5][4].block[1][1],
+            self.features[5][4].block[3][1],
+            self.features[5][5].block[0][1],
+            self.features[5][5].block[1][1],
+            self.features[5][5].block[3][1],
+            self.features[5][6].block[0][1],
+            self.features[5][6].block[1][1],
+            self.features[5][6].block[3][1]
+        ]
+
+        batchnorm_layers_list += [
+            self.features[6][0].block[0][1],
+            self.features[6][0].block[1][1],
+            self.features[6][0].block[3][1],
+            self.features[6][1].block[0][1],
+            self.features[6][1].block[1][1],
+            self.features[6][1].block[3][1],
+            self.features[6][2].block[0][1],
+            self.features[6][2].block[1][1],
+            self.features[6][2].block[3][1],
+            self.features[6][3].block[0][1],
+            self.features[6][3].block[1][1],
+            self.features[6][3].block[3][1],
+            self.features[6][4].block[0][1],
+            self.features[6][4].block[1][1],
+            self.features[6][4].block[3][1],
+            self.features[6][5].block[0][1],
+            self.features[6][5].block[1][1],
+            self.features[6][5].block[3][1],
+            self.features[6][6].block[0][1],
+            self.features[6][6].block[1][1],
+            self.features[6][6].block[3][1],
+            self.features[6][7].block[0][1],
+            self.features[6][7].block[1][1],
+            self.features[6][7].block[3][1],
+            self.features[6][8].block[0][1],
+            self.features[6][8].block[1][1],
+            self.features[6][8].block[3][1]
+        ]
+
+        batchnorm_layers_list += [
+            self.features[7][0].block[0][1],
+            self.features[7][0].block[1][1],
+            self.features[7][0].block[3][1],
+            self.features[7][1].block[0][1],
+            self.features[7][1].block[1][1],
+            self.features[7][1].block[3][1],
+            self.features[7][2].block[0][1],
+            self.features[7][2].block[1][1],
+            self.features[7][2].block[3][1]
+        ]
+
+        batchnorm_layers_list += [
+            self.features[8][1]
+        ]
+
+        return batchnorm_layers_list
+
+
+
+class ConvNeXtTinyBackbone(torch.nn.Module):
     """
-    Standard ConvNeXT Tiny feature backbone module.
+    Standard ConvNeXt Tiny feature backbone module.
     """
 
 
     def __init__(self):
         
-        super(ConvNeXTTinyBackbone, self).__init__()
+        super(ConvNeXtTinyBackbone, self).__init__()
 
         # Model construction
 

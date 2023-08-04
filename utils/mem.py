@@ -121,3 +121,36 @@ def list_gpu_data(idxs):
         gpu_data_list.append(gpu_data)
 
     return gpu_data_list
+
+
+def list_gpu_usage(idxs):
+    """
+    Generates a list of strings showing GPU names and their size.
+    Implemented with PyTorch and cuda.
+
+    :param idxs: list
+        Indices of cuda devices, according to nvidia-smi.
+
+    :return: list
+        List of dicts with GPU names and their sizes.
+    """
+    
+    gpu_data_list = []
+
+    for zidx, idx in enumerate(idxs):
+
+        h = nvmlDeviceGetHandleByIndex(idx)
+        info = nvmlDeviceGetMemoryInfo(h)
+        
+        gpu_data = {
+            "device_id": idx,
+            "device_name": torch.cuda.get_device_name(zidx),
+            "device_size": info.total,
+            "device_size_fancy": sprint_fancy_num_bytes(info.total),
+            "device_usage": info.used,
+            "device_usage_fancy": sprint_fancy_num_bytes(info.used)
+        }
+
+        gpu_data_list.append(gpu_data)
+
+    return gpu_data_list
