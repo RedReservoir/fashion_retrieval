@@ -54,13 +54,13 @@ def create_backbone(backbone_class):
     if backbone_class == "ResNet50Backbone":
         backbone = backbones.ResNet50Backbone()
     if backbone_class == "EfficientNetB3Backbone":
-        backbone = backbones.EfficientNetB3Backbone(batchnorm_eps=1e-4)
+        backbone = backbones.EfficientNetB3Backbone(batchnorm_track_runnning_stats=False)
     if backbone_class == "EfficientNetB4Backbone":
-        backbone = backbones.EfficientNetB4Backbone(batchnorm_eps=1e-4)
+        backbone = backbones.EfficientNetB4Backbone(batchnorm_track_runnning_stats=False)
     if backbone_class == "EfficientNetB5Backbone":
-        backbone = backbones.EfficientNetB5Backbone(batchnorm_eps=1e-4)
+        backbone = backbones.EfficientNetB5Backbone(batchnorm_track_runnning_stats=False)
     if backbone_class == "ConvNeXtTinyBackbone":
-        backbone = backbones.ConvNeXtTinyBackbone(contiguous_after_permute=True)
+        backbone = backbones.ConvNeXtTinyBackbone(add_contiguous_layers=True, substitute_layernorm2d=True)
 
     return backbone
 
@@ -115,13 +115,12 @@ def load_stage_1_experiment_checkpoint(
 
     optimizer_params = ret_head.parameters()
 
-    num_devices = len(exp_params["settings"]["device_idxs"])
     optimizer_class = exp_params["settings"]["stage_1"]["optimizer"]["class"]
     
     if optimizer_class == "Adam":
         optimizer = torch.optim.Adam(optimizer_params)
     if optimizer_class == "SGD":
-        lr = exp_params["settings"]["stage_1"]["optimizer"]["lr"] * num_devices
+        lr = exp_params["settings"]["stage_1"]["optimizer"]["lr"]
         optimizer = torch.optim.SGD(optimizer_params, lr)
 
     optimizer.load_state_dict(experiment_checkpoint["optimizer_state_dict"])
@@ -189,13 +188,12 @@ def load_stage_2_experiment_checkpoint(
         ret_head.parameters()
     )
 
-    num_devices = len(exp_params["settings"]["device_idxs"])
     optimizer_class = exp_params["settings"]["stage_2"]["optimizer"]["class"]
     
     if optimizer_class == "Adam":
         optimizer = torch.optim.Adam(optimizer_params)
     if optimizer_class == "SGD":
-        lr = exp_params["settings"]["stage_2"]["optimizer"]["lr"] * num_devices
+        lr = exp_params["settings"]["stage_2"]["optimizer"]["lr"]
         optimizer = torch.optim.SGD(optimizer_params, lr)
 
     optimizer.load_state_dict(experiment_checkpoint["optimizer_state_dict"])
@@ -249,12 +247,11 @@ def initialize_stage_1_components(exp_params, device):
 
     optimizer_params = ret_head.parameters()
 
-    num_devices = len(exp_params["settings"]["device_idxs"])
     optimizer_class = exp_params["settings"]["stage_1"]["optimizer"]["class"]
 
     if optimizer_class == "Adam":
 
-        lr = exp_params["settings"]["stage_1"]["optimizer"]["lr"] * num_devices
+        lr = exp_params["settings"]["stage_1"]["optimizer"]["lr"]
 
         optimizer = torch.optim.Adam(
             optimizer_params,
@@ -263,7 +260,7 @@ def initialize_stage_1_components(exp_params, device):
 
     if optimizer_class == "SGD":
 
-        lr = exp_params["settings"]["stage_1"]["optimizer"]["lr"] * num_devices
+        lr = exp_params["settings"]["stage_1"]["optimizer"]["lr"]
         momentum = exp_params["settings"]["stage_1"]["optimizer"]["momentum"]
 
         optimizer = torch.optim.SGD(
@@ -340,12 +337,11 @@ def initialize_stage_2_components(
         ret_head.parameters()
     )
 
-    num_devices = len(exp_params["settings"]["device_idxs"])
     optimizer_class = exp_params["settings"]["stage_2"]["optimizer"]["class"]
 
     if optimizer_class == "Adam":
 
-        lr = exp_params["settings"]["stage_2"]["optimizer"]["lr"] * num_devices
+        lr = exp_params["settings"]["stage_2"]["optimizer"]["lr"]
 
         optimizer = torch.optim.Adam(
             optimizer_params,
@@ -354,7 +350,7 @@ def initialize_stage_2_components(
 
     if optimizer_class == "SGD":
 
-        lr = exp_params["settings"]["stage_2"]["optimizer"]["lr"] * num_devices
+        lr = exp_params["settings"]["stage_2"]["optimizer"]["lr"]
         momentum = exp_params["settings"]["stage_2"]["optimizer"]["momentum"]
 
         optimizer = torch.optim.SGD(
@@ -540,8 +536,18 @@ def train_epoch(
     loader_gen = data_loader
     if with_tqdm: loader_gen = tqdm(loader_gen)
 
+    overhead_time_iter = 0
+    overhead_1_time_start = time()
+    loader_time_start = time()
+
     for batch in loader_gen:
             
+        if overhead_time_iter == 1:
+            overhead_time_iter += 1
+            overhead_1_time_end = time()
+
+        overhead_time_iter += 1
+
         batch_loss = batch_evaluation(batch, ret_model, device)
         total_loss_item += batch_loss.sum().item()
 
@@ -556,13 +562,18 @@ def train_epoch(
 
             curr_acc_iter = 0
 
+    loader_time_end = time()
+
     if curr_acc_iter > 0:
 
         scaler.step(optimizer)
         scaler.update()
         optimizer.zero_grad()
 
-    return total_loss_item
+    overhead_1_time = overhead_1_time_end - overhead_1_time_start
+    loader_time = loader_time_end - loader_time_start
+
+    return total_loss_item, overhead_1_time, loader_time
 
 
 def eval_epoch(
@@ -581,12 +592,27 @@ def eval_epoch(
         loader_gen = data_loader
         if with_tqdm: loader_gen = tqdm(loader_gen)
 
+        overhead_time_iter = 0
+        overhead_1_time_start = time()
+        loader_time_start = time()
+
         for batch in loader_gen:
+            
+            if overhead_time_iter == 1:
+                overhead_time_iter += 1
+                overhead_1_time_end = time()
+
+            overhead_time_iter += 1
 
             batch_loss = batch_evaluation(batch, ret_model, device)
             total_loss_item += batch_loss.sum().item()
 
-    return total_loss_item
+        loader_time_end = time()
+
+    overhead_1_time = overhead_1_time_end - overhead_1_time_start
+    loader_time = loader_time_end - loader_time_start
+
+    return total_loss_item, overhead_1_time, loader_time
 
 
 def batch_evaluation(
@@ -643,12 +669,16 @@ def execute_stage_1_DDP(
     finished_mp
 ):
 
-    # Prepare logger
+
+    ####
+    # PREPARE LOGGER
+    ####
+
 
     experiment_name = exp_params["experiment_name"]
     experiment_dirname = os.path.join(pathlib.Path.home(), "data", "fashion_retrieval", experiment_name)
 
-    log_filename = "exp_logs.txt"
+    log_filename = "exp_logs__preview.txt"
     log_full_filename = os.path.join(experiment_dirname, log_filename)
 
     logger_streams = [log_full_filename]
@@ -656,7 +686,11 @@ def execute_stage_1_DDP(
 
     logger = utils.log.Logger(logger_streams)
 
-    # PyTorch DDP stuff
+
+    ####
+    # PYTORCH DDP STUFF
+    ####
+
 
     logger.print("  [Rank {:d}] DDP Setup Preparing...".format(rank))
 
@@ -669,7 +703,11 @@ def execute_stage_1_DDP(
     
     logger.print("  [Rank {:d}] DDP Setup Ready".format(rank))
 
-    # Dataset initialization
+    
+    ####
+    # DATASET INITIALIZATION
+    ####
+
 
     logger.print("  [Rank {:d}] Data Preparing...".format(rank))
 
@@ -695,21 +733,25 @@ def execute_stage_1_DDP(
     train_idxs = ctsrbm_dataset.get_split_mask_idxs("train")
     val_idxs = ctsrbm_dataset.get_split_mask_idxs("val")
 
-    cutdown_ratio = 0.05
+    cutdown_ratio = 0.01
     if cutdown_ratio != 1:
 
         train_idxs = utils.list.cutdown_list(train_idxs, cutdown_ratio)
         val_idxs = utils.list.cutdown_list(val_idxs, cutdown_ratio)
-        
+
         logger.print("  [Rank {:d}] Reducing dataset to {:5.2f}%".format(
             rank,
             cutdown_ratio * 100
         ))
-
+    
     ctsrbm_train_dataset = Subset(ctsrbm_dataset, train_idxs)
     ctsrbm_val_dataset = Subset(ctsrbm_dataset, val_idxs)
 
-    # Data loader initialization
+
+    ####
+    # DATA LOADER INITIALIZATION
+    ####
+    
 
     batch_size = exp_params["settings"]["stage_1"]["data_loading"]["batch_size"]
     num_workers = exp_params["settings"]["stage_1"]["data_loading"]["num_workers"]
@@ -734,43 +776,36 @@ def execute_stage_1_DDP(
     
     logger.print("  [Rank {:d}] Data Prepared".format(rank))
 
-    # Settings & components
+
+    ####
+    # SETTINGS & COMPONENTS
+    ####
+
 
     logger.print("  [Rank {:d}] Components Loading...".format(rank))
 
-    ## Basic settings
+    # Basic settings
 
     max_epochs = exp_params["settings"]["stage_1"]["max_epochs"]
     num_epochs = exp_data["results"]["stage_1"]["num_epochs"]
     
-    ## Load or initialize components
+    # Load or initialize components
 
-    if num_epochs == 0:
+    backbone, ret_head, optimizer, scheduler, early_stopper, best_tracker =\
+    initialize_stage_1_components(
+        exp_params,
+        device
+    )
 
-        backbone, ret_head, optimizer, scheduler, early_stopper, best_tracker =\
-        initialize_stage_1_components(
-            exp_params,
-            device
-        )
+    # Build models
 
-    else:
-
-        last_stage_1_experiment_checkpoint_filename = os.path.join(
-            experiment_dirname, "last_stage_1_ckp.pth", device
-        )
-
-        backbone, ret_head, optimizer, scheduler, early_stopper, best_tracker =\
-        load_stage_1_experiment_checkpoint(
-            last_stage_1_experiment_checkpoint_filename,
-            exp_params
-        )
-
-    ## Build models
+    for param in backbone.parameters():
+        param.requires_grad = False
 
     ret_model = models.BackboneAndHead(backbone, ret_head).to(device)
-    ret_model = DDP(ret_model, device_ids=[rank], find_unused_parameters=True)
+    ret_model = DDP(ret_model, device_ids=[rank])
 
-    ## General settings
+    # General settings
 
     with_tqdm = not command_args.notqdm and not command_args.silent
 
@@ -780,14 +815,15 @@ def execute_stage_1_DDP(
         default=1
     )
 
-    scaler = torch.cuda.amp.GradScaler()
-
-    for param in backbone.parameters():
-        param.requires_grad = False      
+    scaler = torch.cuda.amp.GradScaler()   
 
     logger.print("  [Rank {:d}] Components Loaded".format(rank))
 
-    # Training loop
+
+    ####
+    # TRAINING LOOP
+    ####
+
 
     logger.print("  [Rank {:d}] Training Loop Begin".format(rank))
 
@@ -798,7 +834,7 @@ def execute_stage_1_DDP(
 
     while not finished_mp.value:
 
-        ## Epoch pre-processing
+        # Epoch pre-processing
 
         num_epochs += 1
 
@@ -807,11 +843,11 @@ def execute_stage_1_DDP(
             num_epochs
         ))
 
-        ## Training
+        # Training
 
         start_time = time()
 
-        train_loss = train_epoch(
+        train_loss, train_overhead_1_time, train_loader_time = train_epoch(
             train_loader,
             ret_model,
             optimizer,
@@ -836,11 +872,11 @@ def execute_stage_1_DDP(
             train_mean_loss
         ))
 
-        ## Validation
+        # Validation
 
         start_time = time()
 
-        val_loss = eval_epoch(
+        val_loss, val_overhead_1_time, val_loader_time = eval_epoch(
             val_loader,
             ret_model,
             device,
@@ -868,7 +904,7 @@ def execute_stage_1_DDP(
             logger.print("  [Rank {:d}] Current memory usage:".format(rank))
             logger.print(utils.mem.sprint_memory_usage(exp_params["settings"]["device_idxs"], num_spaces=4))
 
-        ## Track results
+        # Track results
 
         train_epoch_time_list_mp[rank] = train_epoch_time
         val_epoch_time_list_mp[rank] = val_epoch_time
@@ -886,60 +922,61 @@ def execute_stage_1_DDP(
             exp_data["results"]["stage_1"]["val_mean_loss_list"].append(list(val_mean_loss_list_mp))
 
             exp_data["settings"]["stage_1"]["learning_rate_list"].append(scheduler.get_last_lr()[0])
-        
-        ## Training conditions and checkpoints
+
+        # PREVIEW RESULTS
 
         if rank == 0:
 
-            ## Number of epochs
+            train_epoch_time = compute_time(
+                train_epoch_time,
+                train_overhead_1_time,
+                train_loader_time,
+                cutdown_ratio,
+                len(ctsrbm_dataset),
+                batch_size
+            )
 
-            if num_epochs >= max_epochs:
-                finished_mp.value = True
+            val_epoch_time = compute_time(
+                val_epoch_time,
+                val_overhead_1_time,
+                val_loader_time,
+                cutdown_ratio,
+                len(ctsrbm_dataset),
+                batch_size
+            )
 
-            ## Early stopping
+            full_train_epoch_time = train_epoch_time / cutdown_ratio
+            full_val_epoch_time = val_epoch_time / cutdown_ratio
 
-            if early_stopper.early_stop(sum(train_mean_loss_list_mp)):
-                finished_mp.value = True
+            logger.print("STAGE 1 TRAIN EPOCH TIME:", utils.time.sprint_fancy_time_diff(train_epoch_time))
+            logger.print("STAGE 1 VAL EPOCH TIME:", utils.time.sprint_fancy_time_diff(val_epoch_time))
+            logger.print("STAGE 1 FULL TRAIN EPOCH TIME:", utils.time.sprint_fancy_time_diff(full_train_epoch_time))
+            logger.print("STAGE 1 FULL VAL EPOCH TIME:", utils.time.sprint_fancy_time_diff(full_val_epoch_time))
+
+            mem_b = utils.mem.list_gpu_usage(exp_params["settings"]["device_idxs"])[0]["device_usage"]
+
+            logger.print("Stage 1 GPU MEM B:", mem_b)
+            logger.print("Stage 1 epoch time s:", full_train_epoch_time + full_val_epoch_time)
+
+        # Training conditions and checkpoints
+
+        if rank == 0:
+
+            ## Automatic finish
+            
+            finished_mp.value = True
 
             ## Checkpoint saving
 
             with utils.sig.DelayedInterrupt():
-
-                ## Save best component checkpoint
-
-                if best_tracker.is_best(sum(train_mean_loss_list_mp)):
-
-                    best_stage_1_experiment_checkpoint_filename = os.path.join(
-                        experiment_dirname, "best_stage_1_ckp.pth"
-                    )
-
-                    logger.print("  [Rank {:d}] Saving currently best model to \"{:s}\"".format(
-                        rank,
-                        best_stage_1_experiment_checkpoint_filename
-                    ))
-
-                    save_experiment_checkpoint(
-                        best_stage_1_experiment_checkpoint_filename,
-                        backbone,
-                        ret_head,
-                        optimizer,
-                        scheduler,
-                        early_stopper,
-                        best_tracker
-                        )
-
-                    logger.print("  [Rank {:d}] Saved currently best model to \"{:s}\"".format(
-                        rank,
-                        best_stage_1_experiment_checkpoint_filename
-                    ))
                     
-                ## Save experiment data
+                ### Save experiment data
 
                 exp_data["results"]["stage_1"]["num_epochs"] = num_epochs
                 exp_data["results"]["stage_1"]["finished"] = finished_mp.value
 
                 exp_data_filename = os.path.join(
-                    experiment_dirname, "exp_data.json"
+                    experiment_dirname, "exp_data__preview.json"
                 )
 
                 logger.print("  [Rank {:d}] Saving experiment data to \"{:s}\"".format(
@@ -956,10 +993,10 @@ def execute_stage_1_DDP(
                     exp_data_filename
                 ))
 
-                ## Save last component checkpoint
+                ### Save last component checkpoint
                 
                 last_stage_1_experiment_checkpoint_filename = os.path.join(
-                    experiment_dirname, "last_stage_1_ckp.pth"
+                    experiment_dirname, "last_stage_1_ckp__preview.pth"
                 )
 
                 logger.print("  [Rank {:d}] Saving last epoch model to \"{:s}\"".format(
@@ -986,7 +1023,10 @@ def execute_stage_1_DDP(
 
     logger.print("  [Rank {:d}] Training Loop End".format(rank))
 
-    # PyTorch DDP stuff
+
+    ####
+    # PYTORCH DDP STUFF
+    ####
 
     destroy_process_group()
 
@@ -1004,12 +1044,16 @@ def execute_stage_2_DDP(
     finished_mp
 ):
 
-    # Prepare logger
+
+    ####
+    # PREPARE LOGGER
+    ####
+
 
     experiment_name = exp_params["experiment_name"]
     experiment_dirname = os.path.join(pathlib.Path.home(), "data", "fashion_retrieval", experiment_name)
 
-    log_filename = "exp_logs.txt"
+    log_filename = "exp_logs__preview.txt"
     log_full_filename = os.path.join(experiment_dirname, log_filename)
 
     logger_streams = [log_full_filename]
@@ -1019,7 +1063,11 @@ def execute_stage_2_DDP(
 
     logger.print("  [Rank {:d}] Logger prepared".format(rank))
 
-    # PyTorch DDP stuff
+
+    ####
+    # PYTORCH DDP STUFF
+    ####
+
 
     logger.print("  [Rank {:d}] DDP Setup Preparing...".format(rank))
 
@@ -1031,8 +1079,12 @@ def execute_stage_2_DDP(
     device = torch.device(rank)
     
     logger.print("  [Rank {:d}] DDP Setup Ready".format(rank))
+    
+    
+    ####
+    # DATASET INITIALIZATION
+    ####
 
-    # Dataset initialization
 
     logger.print("  [Rank {:d}] Data Preparing...".format(rank))
 
@@ -1058,7 +1110,7 @@ def execute_stage_2_DDP(
     train_idxs = ctsrbm_dataset.get_split_mask_idxs("train")
     val_idxs = ctsrbm_dataset.get_split_mask_idxs("val")
 
-    cutdown_ratio = 0.05
+    cutdown_ratio = 0.01
     if cutdown_ratio != 1:
 
         train_idxs = utils.list.cutdown_list(train_idxs, cutdown_ratio)
@@ -1072,7 +1124,11 @@ def execute_stage_2_DDP(
     ctsrbm_train_dataset = Subset(ctsrbm_dataset, train_idxs)
     ctsrbm_val_dataset = Subset(ctsrbm_dataset, val_idxs)
 
-    # Data loader initialization
+
+    ####
+    # DATA LOADER INITIALIZATION
+    ####
+    
 
     batch_size = exp_params["settings"]["stage_2"]["data_loading"]["batch_size"]
     num_workers = exp_params["settings"]["stage_2"]["data_loading"]["num_workers"]
@@ -1096,50 +1152,42 @@ def execute_stage_2_DDP(
     )
     
     logger.print("  [Rank {:d}] Data Prepared".format(rank))
+    
+    
+    ####
+    # SETTINGS & COMPONENTS
+    ####
 
-    # Settings & components
     
     logger.print("  [Rank {:d}] Components Loading...".format(rank))
 
-    ## Basic settings
+    # Basic settings
 
     max_epochs = exp_params["settings"]["stage_2"]["max_epochs"]
     num_epochs = exp_data["results"]["stage_2"]["num_epochs"]
     
-    ## Load or initialize components
+    # Load or initialize components
 
-    if num_epochs == 0:
+    last_stage_1_experiment_checkpoint_filename = os.path.join(
+        experiment_dirname, "last_stage_1_ckp__preview.pth"
+    )
 
-        best_stage_1_experiment_checkpoint_filename = os.path.join(
-            experiment_dirname, "best_stage_1_ckp.pth"
-        )
+    backbone, ret_head, optimizer, scheduler, early_stopper, best_tracker =\
+    initialize_stage_2_components(
+        last_stage_1_experiment_checkpoint_filename,
+        exp_params,
+        device
+    )
 
-        backbone, ret_head, optimizer, scheduler, early_stopper, best_tracker =\
-        initialize_stage_2_components(
-            best_stage_1_experiment_checkpoint_filename,
-            exp_params,
-            device
-        )
+    # Build models
 
-    else:
-
-        last_stage_2_experiment_checkpoint_filename = os.path.join(
-            experiment_dirname, "last_stage_2_ckp.pth"
-        )
-
-        backbone, ret_head, optimizer, scheduler, early_stopper, best_tracker =\
-        load_stage_2_experiment_checkpoint(
-            last_stage_2_experiment_checkpoint_filename,
-            exp_params,
-            device
-        )
-
-    ## Build models
+    #for param in backbone.parameters():
+    #    param.requires_grad = True     
 
     ret_model = models.BackboneAndHead(backbone, ret_head).to(device)
     ret_model = DDP(ret_model, device_ids=[rank])
 
-    ## General settings
+    # General settings
 
     with_tqdm = not command_args.notqdm and not command_args.silent
 
@@ -1149,14 +1197,15 @@ def execute_stage_2_DDP(
         default=1
     )
 
-    scaler = torch.cuda.amp.GradScaler()
-
-    for param in backbone.parameters():
-        param.requires_grad = True      
+    scaler = torch.cuda.amp.GradScaler() 
 
     logger.print("  [Rank {:d}] Components Loaded".format(rank))
 
-    # Training loop
+
+    ####
+    # TRAINING LOOP
+    ####
+
 
     logger.print("  [Rank {:d}] Training Loop Begin".format(rank))
 
@@ -1167,7 +1216,7 @@ def execute_stage_2_DDP(
 
     while not finished_mp.value:
 
-        ## Epoch pre-processing
+        # Epoch pre-processing
 
         num_epochs += 1
 
@@ -1176,11 +1225,11 @@ def execute_stage_2_DDP(
             num_epochs
         ))
 
-        ## Training
+        # Training
 
         start_time = time()
 
-        train_loss = train_epoch(
+        train_loss, train_overhead_1_time, train_loader_time = train_epoch(
             train_loader,
             ret_model,
             optimizer,
@@ -1205,11 +1254,11 @@ def execute_stage_2_DDP(
             train_mean_loss
         ))
 
-        ## Validation
+        # Validation
 
         start_time = time()
 
-        val_loss = eval_epoch(
+        val_loss, val_overhead_1_time, val_loader_time = eval_epoch(
             val_loader,
             ret_model,
             device,
@@ -1237,7 +1286,7 @@ def execute_stage_2_DDP(
             logger.print("  [Rank {:d}] Current memory usage:".format(rank))
             logger.print(utils.mem.sprint_memory_usage(exp_params["settings"]["device_idxs"], num_spaces=4))
 
-        ## Track results
+        # Track results
 
         train_epoch_time_list_mp[rank] = train_epoch_time
         val_epoch_time_list_mp[rank] = val_epoch_time
@@ -1255,60 +1304,59 @@ def execute_stage_2_DDP(
             exp_data["results"]["stage_2"]["val_mean_loss_list"].append(list(val_mean_loss_list_mp))
 
             exp_data["settings"]["stage_2"]["learning_rate_list"].append(scheduler.get_last_lr()[0])
-        
-        ## Training conditions and checkpoints
+
+        # PREVIEW RESULTS
 
         if rank == 0:
 
-            ## Number of epochs
+            train_epoch_time = compute_time(
+                train_epoch_time,
+                train_overhead_1_time,
+                train_loader_time,
+                cutdown_ratio,
+                len(ctsrbm_dataset),
+                batch_size
+            )
 
-            if num_epochs >= max_epochs:
-                finished_mp.value = True
+            val_epoch_time = compute_time(
+                val_epoch_time,
+                val_overhead_1_time,
+                val_loader_time,
+                cutdown_ratio,
+                len(ctsrbm_dataset),
+                batch_size
+            )
 
-            ## Early stopping
+            full_train_epoch_time = train_epoch_time / cutdown_ratio
+            full_val_epoch_time = val_epoch_time / cutdown_ratio
 
-            if early_stopper.early_stop(sum(train_mean_loss_list_mp)):
-                finished_mp.value = True
+            logger.print("STAGE 2 TRAIN EPOCH TIME:", utils.time.sprint_fancy_time_diff(train_epoch_time))
+            logger.print("STAGE 2 VAL EPOCH TIME:", utils.time.sprint_fancy_time_diff(val_epoch_time))
+            logger.print("STAGE 2 FULL TRAIN EPOCH TIME:", utils.time.sprint_fancy_time_diff(full_train_epoch_time))
+            logger.print("STAGE 2 FULL VAL EPOCH TIME:", utils.time.sprint_fancy_time_diff(full_val_epoch_time))
+
+            mem_b = utils.mem.list_gpu_usage(exp_params["settings"]["device_idxs"])[0]["device_usage"]
+
+            logger.print("Stage 2 GPU MEM B:", mem_b)
+            logger.print("Stage 2 epoch time s:", full_train_epoch_time + full_val_epoch_time)
+        
+        # Training conditions and checkpoints
+
+        if rank == 0:
+
+            finished_mp.value = True
 
             ## Checkpoint saving
 
             with utils.sig.DelayedInterrupt():
-
-                ## Save best component checkpoint
-
-                if best_tracker.is_best(sum(train_mean_loss_list_mp)):
-
-                    best_stage_2_experiment_checkpoint_filename = os.path.join(
-                        experiment_dirname, "best_stage_2_ckp.pth"
-                    )
-
-                    logger.print("  [Rank {:d}] Saving currently best model to \"{:s}\"".format(
-                        rank,
-                        best_stage_2_experiment_checkpoint_filename
-                    ))
-
-                    save_experiment_checkpoint(
-                        best_stage_2_experiment_checkpoint_filename,
-                        backbone,
-                        ret_head,
-                        optimizer,
-                        scheduler,
-                        early_stopper,
-                        best_tracker
-                        )
-
-                    logger.print("  [Rank {:d}] Saved currently best model to \"{:s}\"".format(
-                        rank,
-                        best_stage_2_experiment_checkpoint_filename
-                    ))
                     
-                ## Save experiment data
+                ### Save experiment data
 
                 exp_data["results"]["stage_2"]["num_epochs"] = num_epochs
                 exp_data["results"]["stage_2"]["finished"] = finished_mp.value
 
                 exp_data_filename = os.path.join(
-                    experiment_dirname, "exp_data.json"
+                    experiment_dirname, "exp_data__preview.json"
                 )
 
                 logger.print("  [Rank {:d}] Saving experiment data to \"{:s}\"".format(
@@ -1325,10 +1373,10 @@ def execute_stage_2_DDP(
                     exp_data_filename
                 ))
 
-                ## Save last component checkpoint
+                ### Save last component checkpoint
                 
                 last_stage_2_experiment_checkpoint_filename = os.path.join(
-                    experiment_dirname, "last_stage_2_ckp.pth"
+                    experiment_dirname, "last_stage_2_ckp__preview.pth"
                 )
 
                 logger.print("  [Rank {:d}] Saving last epoch model to \"{:s}\"".format(
@@ -1355,7 +1403,10 @@ def execute_stage_2_DDP(
 
     logger.print("  [Rank {:d}] Training Loop End".format(rank))
 
-    # PyTorch DDP stuff
+
+    ####
+    # PYTORCH DDP STUFF
+    ####
 
     destroy_process_group()
 
@@ -1371,12 +1422,15 @@ def execute_test_DDP(
     finished_mp
 ):
 
-    # Prepare logger
+    ####
+    # PREPARE LOGGER
+    ####
+
 
     experiment_name = exp_params["experiment_name"]
     experiment_dirname = os.path.join(pathlib.Path.home(), "data", "fashion_retrieval", experiment_name)
 
-    log_filename = "exp_logs.txt"
+    log_filename = "exp_logs__preview.txt"
     log_full_filename = os.path.join(experiment_dirname, log_filename)
 
     logger_streams = [log_full_filename]
@@ -1386,7 +1440,11 @@ def execute_test_DDP(
 
     logger.print("  [Rank {:d}] Logger prepared".format(rank))
 
-    # PyTorch DDP stuff
+
+    ####
+    # PYTORCH DDP STUFF
+    ####
+
 
     logger.print("  [Rank {:d}] DDP Setup Preparing...".format(rank))
 
@@ -1398,8 +1456,12 @@ def execute_test_DDP(
     device = torch.device(rank)
     
     logger.print("  [Rank {:d}] DDP Setup Ready".format(rank))
+    
+    
+    ####
+    # DATASET INITIALIZATION
+    ####
 
-    # Dataset initialization
 
     logger.print("  [Rank {:d}] Data Preparing...".format(rank))
     
@@ -1424,7 +1486,7 @@ def execute_test_DDP(
 
     test_idxs = ctsrbm_dataset.get_split_mask_idxs("test")
 
-    cutdown_ratio = 0.05
+    cutdown_ratio = 0.01
     if cutdown_ratio != 1:
 
         test_idxs = utils.list.cutdown_list(test_idxs, cutdown_ratio)
@@ -1433,16 +1495,14 @@ def execute_test_DDP(
             rank,
             cutdown_ratio * 100
         ))
-
-    """
-    if len(exp_params["settings"]["device_idxs"]) > 1:
-
-        test_idxs = test_idxs[:(len(test_idxs) // batch_size) * batch_size]
-    """
     
     ctsrbm_test_dataset = Subset(ctsrbm_dataset, test_idxs)
 
-    # Data loader initialization
+
+    ####
+    # DATA LOADER INITIALIZATION
+    ####
+    
 
     batch_size = exp_params["settings"]["test"]["data_loading"]["batch_size"]
     num_workers = exp_params["settings"]["test"]["data_loading"]["num_workers"]
@@ -1457,36 +1517,44 @@ def execute_test_DDP(
     )
     
     logger.print("  [Rank {:d}] Data Prepared".format(rank))
-
-    # Settings & components
     
+
+    ####
+    # SETTINGS & COMPONENTS
+    ####
+
+
     logger.print("  [Rank {:d}] Components Loading...".format(rank))
 
-    ## Load or initialize components
+    # Load or initialize components
 
-    best_stage_2_experiment_checkpoint_filename = os.path.join(
-        experiment_dirname, "best_stage_2_ckp.pth"
+    last_stage_2_experiment_checkpoint_filename = os.path.join(
+        experiment_dirname, "last_stage_2_ckp__preview.pth"
     )
 
     backbone, ret_head, optimizer, scheduler, early_stopper, best_tracker =\
     load_stage_2_experiment_checkpoint(
-        best_stage_2_experiment_checkpoint_filename,
+        last_stage_2_experiment_checkpoint_filename,
         exp_params,
         device
     )
         
-    ## Build models
+    # Build models
 
     ret_model = models.BackboneAndHead(backbone, ret_head).to(device)
     ret_model = DDP(ret_model, device_ids=[rank])
 
-    ## General settings
+    # General settings
 
     with_tqdm = not command_args.notqdm and not command_args.silent
 
     logger.print("  [Rank {:d}] Components Loaded".format(rank))
 
-    # Testing
+
+    ####
+    # TESTING
+    ####
+
 
     logger.print("  [Rank {:d}] Testing Begin".format(rank))
 
@@ -1497,11 +1565,11 @@ def execute_test_DDP(
 
     if not finished_mp.value:
 
-        ## Test epoch
+        # Testing
 
         start_time = time()
 
-        test_loss = eval_epoch(
+        test_loss, test_overhead_1_time, test_loader_time = eval_epoch(
             test_loader,
             ret_model,
             device,
@@ -1527,7 +1595,7 @@ def execute_test_DDP(
             logger.print("  [Rank {:d}] Current memory usage:".format(rank))
             logger.print(utils.mem.sprint_memory_usage(exp_params["settings"]["device_idxs"], num_spaces=4))
         
-        ## Track results
+        # Track results
 
         test_epoch_time_list_mp[rank] = test_epoch_time
         test_mean_loss_list_mp[rank] = test_mean_loss
@@ -1540,7 +1608,25 @@ def execute_test_DDP(
 
             exp_data["results"]["test"]["test_mean_loss"] = list(test_mean_loss_list_mp)
 
-        ## Training conditions and checkpoints
+        # PREVIEW RESULTS
+
+        if rank == 0:
+
+            test_epoch_time = compute_time(
+                test_epoch_time,
+                test_overhead_1_time,
+                test_loader_time,
+                cutdown_ratio,
+                len(ctsrbm_dataset),
+                batch_size
+            )
+
+            full_test_epoch_time = test_epoch_time / cutdown_ratio
+
+            logger.print("TEST EPOCH TIME:", utils.time.sprint_fancy_time_diff(test_epoch_time))
+            logger.print("FULL TEST EPOCH TIME:", utils.time.sprint_fancy_time_diff(full_test_epoch_time))
+
+        # Training conditions and checkpoints
 
         finished_mp.value = True        
 
@@ -1550,12 +1636,12 @@ def execute_test_DDP(
 
             with utils.sig.DelayedInterrupt():
 
-                ## Save experiment data
+                ### Save experiment data
 
                 exp_data["results"]["test"]["finished"] = finished_mp.value
 
                 exp_data_filename = os.path.join(
-                    experiment_dirname, "exp_data.json"
+                    experiment_dirname, "exp_data__preview.json"
                 )
 
                 logger.print("  [Rank {:d}] Saving experiment data to \"{:s}\"".format(
@@ -1574,7 +1660,10 @@ def execute_test_DDP(
 
     logger.print("  [Rank {:d}] Testing End".format(rank))
 
-    # PyTorch DDP stuff
+
+    ####
+    # PYTORCH DDP STUFF
+    ####
 
     destroy_process_group()
 
@@ -1638,8 +1727,11 @@ if __name__ == "__main__":
     experiment_name = exp_params["experiment_name"]
     experiment_dirname = os.path.join(pathlib.Path.home(), "data", "fashion_retrieval", experiment_name)
 
-    log_filename = "exp_logs.txt"
+    log_filename = "exp_logs__preview.txt"
     log_full_filename = os.path.join(experiment_dirname, log_filename)
+
+    if os.path.exists(log_full_filename):
+        os.remove(log_full_filename)
 
     logger_streams = [log_full_filename]
     if not command_args.silent: logger_streams.append(sys.stdout)
@@ -1653,42 +1745,37 @@ if __name__ == "__main__":
 
     
     exp_data_filename = os.path.join(
-        experiment_dirname, "exp_data.json"
+        experiment_dirname, "exp_data__preview.json"
     )
 
-    if not os.path.exists(exp_data_filename):
+    if os.path.exists(exp_data_filename):
+        os.remove(exp_data_filename)
 
-        exp_data = {}
-        exp_data["experiment_name"] = experiment_name
-        exp_data["settings"] = {}
-        exp_data["results"] = {}
+    exp_data = {}
+    exp_data["experiment_name"] = experiment_name
+    exp_data["settings"] = {}
+    exp_data["results"] = {}
 
-        exp_data["settings"]["datasets"] = [
-            "DeepFashion Consumer-to-shop Clothes Retrieval Benchmark"
-        ]
+    exp_data["settings"]["datasets"] = [
+        "DeepFashion Consumer-to-shop Clothes Retrieval Benchmark"
+    ]
 
-        exp_data["settings"]["backbone"] = {
-            "class": exp_params["settings"]["backbone"]["class"]
-        }
+    exp_data["settings"]["backbone"] = {
+        "class": exp_params["settings"]["backbone"]["class"]
+    }
 
-        exp_data["settings"]["heads"] = []
-        exp_data["settings"]["heads"].append({
-            "class": "RetHead"
-        })
+    exp_data["settings"]["heads"] = []
+    exp_data["settings"]["heads"].append({
+        "class": "RetHead"
+    })
 
-        exp_data_filename = os.path.join(
-            experiment_dirname, "exp_data.json"
-        )
+    exp_data_filename = os.path.join(
+        experiment_dirname, "exp_data__preview.json"
+    )
         
-        save_exp_data(exp_data_filename, exp_data)
+    save_exp_data(exp_data_filename, exp_data)
 
-        logger.print("Starting experiment at {:s}".format(datetime_now_str))
-
-    else:
-
-        logger.print("Resuming experiment at {:s}".format(datetime_now_str))
-    
-    exp_data = load_exp_data(exp_data_filename)
+    logger.print("Running preview at {:s}".format(datetime_now_str))
 
 
     ####
@@ -1842,3 +1929,47 @@ if __name__ == "__main__":
             ],
             nprocs=world_size
         )
+
+
+    ####
+    # POST-PROC
+    ####
+
+    last_stage_1_experiment_checkpoint_filename = os.path.join(
+        experiment_dirname, "last_stage_1_ckp__preview.pth"
+    )
+
+    if os.path.exists(last_stage_1_experiment_checkpoint_filename):
+        os.remove(last_stage_1_experiment_checkpoint_filename)
+        
+    last_stage_2_experiment_checkpoint_filename = os.path.join(
+        experiment_dirname, "last_stage_2_ckp__preview.pth"
+    )
+
+    if os.path.exists(last_stage_2_experiment_checkpoint_filename):
+        os.remove(last_stage_2_experiment_checkpoint_filename)
+
+
+
+def compute_time(
+        total_time,
+        overhead_1_time,
+        loader_time,
+        cutdown_ratio,
+        dataset_size,
+        batch_size
+    ):
+
+    t = total_time
+    o = overhead_1_time
+    l = loader_time
+
+    a = cutdown_ratio
+    d = dataset_size / batch_size
+
+    eps = t - l
+    h = ((a * o) - (l / d)) / (a - (1/d))
+
+    tt = t - ((1 - a) * (h + eps))
+
+    return tt

@@ -125,14 +125,14 @@ def list_gpu_data(idxs):
 
 def list_gpu_usage(idxs):
     """
-    Generates a list of strings showing GPU names and their size.
+    Generates a list of strings showing GPU names, sizes and usages.
     Implemented with PyTorch and cuda.
 
     :param idxs: list
         Indices of cuda devices, according to nvidia-smi.
 
     :return: list
-        List of dicts with GPU names and their sizes.
+        List of dicts with GPU names, their sizes and usages.
     """
     
     gpu_data_list = []

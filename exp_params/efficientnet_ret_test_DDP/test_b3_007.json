@@ -1,0 +1,60 @@
+{
+  "experiment_name": "ret_test_DDP/efficientnet_b3_ret_test_007",
+  "settings": {
+    "device_idxs": [
+      0,
+      1,
+      2,
+      7
+    ],
+    "backbone": {
+      "class": "EfficientNetB3Backbone"
+    },
+    "stage_1": {
+      "max_epochs": 1,
+      "optimizer": {
+        "class": "SGD",
+        "lr": 0.001,
+        "momentum": 0.9
+      },
+      "scheduler": {
+        "class": "ExponentialLR",
+        "gamma": 0.95
+      },
+      "early_stopper": {
+        "patience": 5,
+        "min_delta": 0
+      },
+      "data_loading": {
+        "batch_size": 8,
+        "num_workers": 3
+      }
+    },
+    "stage_2": {
+      "max_epochs": 1,
+      "optimizer": {
+        "class": "SGD",
+        "lr": 0.0005,
+        "momentum": 0.9
+      },
+      "scheduler": {
+        "class": "ExponentialLR",
+        "gamma": 0.95
+      },
+      "early_stopper": {
+        "patience": 5,
+        "min_delta": 0
+      },
+      "data_loading": {
+        "batch_size": 8,
+        "num_workers": 3
+      }
+    },
+    "test": {
+      "data_loading": {
+        "batch_size": 8,
+        "num_workers": 3
+      }
+    }
+  }
+}

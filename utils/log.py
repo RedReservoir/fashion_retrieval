@@ -58,4 +58,3 @@ class Logger:
         for out_stream in self.out_streams:
 
             out_stream.flush()
-            

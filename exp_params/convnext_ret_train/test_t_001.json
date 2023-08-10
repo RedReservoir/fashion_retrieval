@@ -1,0 +1,60 @@
+{
+    "experiment_name": "ret_train/convnext_t/test_001",
+    "settings": {
+      "device_idxs": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "backbone": {
+        "class": "ConvNeXtTinyBackbone"
+      },
+      "stage_1": {
+        "max_epochs": 30,
+        "optimizer": {
+          "class": "SGD",
+          "lr": 1e-3,
+          "momentum": 0.9
+        },
+        "scheduler": {
+          "class": "ExponentialLR",
+          "gamma": 0.95
+        },
+        "early_stopper": {
+          "patience": 5,
+          "min_delta": 0
+        },
+        "data_loading": {
+          "batch_size": 16,
+          "num_workers": 4
+        }
+      },
+      "stage_2": {
+        "max_epochs": 30,
+        "optimizer": {
+          "class": "SGD",
+          "lr": 1e-6,
+          "momentum": 0.9
+        },
+        "scheduler": {
+          "class": "ExponentialLR",
+          "gamma": 0.95
+        },
+        "early_stopper": {
+          "patience": 8,
+          "min_delta": 0
+        },
+        "data_loading": {
+          "batch_size": 16,
+          "num_workers": 4
+        }
+      },
+      "test": {
+        "data_loading": {
+          "batch_size": 16,
+          "num_workers": 4
+        }
+      }
+    }
+  }
