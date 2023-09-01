@@ -54,7 +54,7 @@ def create_backbone(backbone_class):
     if backbone_class == "ResNet50Backbone":
         backbone = backbones.ResNet50Backbone()
     if backbone_class == "EfficientNetB3Backbone":
-        backbone = backbones.EfficientNetB3Backbone(batchnorm_eps=1e-4)
+        backbone = backbones.EfficientNetB3Backbone()
     if backbone_class == "EfficientNetB4Backbone":
         backbone = backbones.EfficientNetB4Backbone(batchnorm_eps=1e-4)
     if backbone_class == "EfficientNetB5Backbone":
@@ -528,6 +528,7 @@ def train_epoch(
         optimizer,
         scaler,
         device,
+        logger,
         max_acc_iter=1,
         with_tqdm=True
     ):
@@ -542,7 +543,7 @@ def train_epoch(
 
     for batch in loader_gen:
             
-        batch_loss = batch_evaluation(batch, ret_model, device)
+        batch_loss = batch_evaluation(batch, ret_model, device, logger)
         total_loss_item += batch_loss.sum().item()
 
         scaler.scale(batch_loss.mean() / max_acc_iter).backward()
@@ -569,6 +570,7 @@ def eval_epoch(
         data_loader,
         ret_model,
         device,
+        logger,
         with_tqdm=True
     ):
 
@@ -583,7 +585,7 @@ def eval_epoch(
 
         for batch in loader_gen:
 
-            batch_loss = batch_evaluation(batch, ret_model, device)
+            batch_loss = batch_evaluation(batch, ret_model, device, logger)
             total_loss_item += batch_loss.sum().item()
 
     return total_loss_item
@@ -592,7 +594,8 @@ def eval_epoch(
 def batch_evaluation(
         batch,
         ret_model,
-        device
+        device,
+        logger
     ):
 
     anc_imgs = batch[0].to(device)
@@ -610,15 +613,15 @@ def batch_evaluation(
 
     if np.isnan(batch_loss.sum().item()):
 
-        print("WARNING: Batch produced nan loss")
-        print("  batch length", batch_loss.size(dim=0))
-        print("  batch_loss nans", torch.isnan(batch_loss).any())
-        print("  anc_imgs nans", torch.isnan(anc_imgs).any())
-        print("  pos_imgs nans", torch.isnan(pos_imgs).any())
-        print("  neg_imgs nans", torch.isnan(neg_imgs).any())
-        print("  anc_emb nans", torch.isnan(anc_emb).any())
-        print("  pos_emb nans", torch.isnan(pos_emb).any())
-        print("  neg_emb nans", torch.isnan(neg_emb).any())
+        logger.print("WARNING: Batch produced nan loss")
+        logger.print("  batch length", batch_loss.size(dim=0))
+        logger.print("  batch_loss nans", torch.isnan(batch_loss).any())
+        logger.print("  anc_imgs nans", torch.isnan(anc_imgs).any())
+        logger.print("  pos_imgs nans", torch.isnan(pos_imgs).any())
+        logger.print("  neg_imgs nans", torch.isnan(neg_imgs).any())
+        logger.print("  anc_emb nans", torch.isnan(anc_emb).any())
+        logger.print("  pos_emb nans", torch.isnan(pos_emb).any())
+        logger.print("  neg_emb nans", torch.isnan(neg_emb).any())
 
     return batch_loss
 
@@ -695,7 +698,7 @@ def execute_stage_1_DDP(
     train_idxs = ctsrbm_dataset.get_split_mask_idxs("train")
     val_idxs = ctsrbm_dataset.get_split_mask_idxs("val")
 
-    cutdown_ratio = 0.05
+    cutdown_ratio = 1
     if cutdown_ratio != 1:
 
         train_idxs = utils.list.cutdown_list(train_idxs, cutdown_ratio)
@@ -756,19 +759,20 @@ def execute_stage_1_DDP(
     else:
 
         last_stage_1_experiment_checkpoint_filename = os.path.join(
-            experiment_dirname, "last_stage_1_ckp.pth", device
+            experiment_dirname, "last_stage_1_ckp.pth"
         )
 
         backbone, ret_head, optimizer, scheduler, early_stopper, best_tracker =\
         load_stage_1_experiment_checkpoint(
             last_stage_1_experiment_checkpoint_filename,
-            exp_params
+            exp_params,
+            device
         )
 
     ## Build models
 
     ret_model = models.BackboneAndHead(backbone, ret_head).to(device)
-    ret_model = DDP(ret_model, device_ids=[rank], find_unused_parameters=True)
+    ret_model = DDP(ret_model, device_ids=[rank], find_unused_parameters=True, broadcast_buffers=False)
 
     ## General settings
 
@@ -817,6 +821,7 @@ def execute_stage_1_DDP(
             optimizer,
             scaler,
             device,
+            logger,
             max_acc_iter=max_acc_iter,
             with_tqdm=with_tqdm
         )
@@ -844,6 +849,7 @@ def execute_stage_1_DDP(
             val_loader,
             ret_model,
             device,
+            logger,
             with_tqdm=with_tqdm
         )
 
@@ -1058,7 +1064,7 @@ def execute_stage_2_DDP(
     train_idxs = ctsrbm_dataset.get_split_mask_idxs("train")
     val_idxs = ctsrbm_dataset.get_split_mask_idxs("val")
 
-    cutdown_ratio = 0.05
+    cutdown_ratio = 1
     if cutdown_ratio != 1:
 
         train_idxs = utils.list.cutdown_list(train_idxs, cutdown_ratio)
@@ -1137,7 +1143,7 @@ def execute_stage_2_DDP(
     ## Build models
 
     ret_model = models.BackboneAndHead(backbone, ret_head).to(device)
-    ret_model = DDP(ret_model, device_ids=[rank])
+    ret_model = DDP(ret_model, device_ids=[rank], broadcast_buffers=False)
 
     ## General settings
 
@@ -1186,6 +1192,7 @@ def execute_stage_2_DDP(
             optimizer,
             scaler,
             device,
+            logger,
             max_acc_iter=max_acc_iter,
             with_tqdm=with_tqdm
         )
@@ -1213,6 +1220,7 @@ def execute_stage_2_DDP(
             val_loader,
             ret_model,
             device,
+            logger,
             with_tqdm=with_tqdm
         )
 
@@ -1424,7 +1432,7 @@ def execute_test_DDP(
 
     test_idxs = ctsrbm_dataset.get_split_mask_idxs("test")
 
-    cutdown_ratio = 0.05
+    cutdown_ratio = 1
     if cutdown_ratio != 1:
 
         test_idxs = utils.list.cutdown_list(test_idxs, cutdown_ratio)
@@ -1478,7 +1486,7 @@ def execute_test_DDP(
     ## Build models
 
     ret_model = models.BackboneAndHead(backbone, ret_head).to(device)
-    ret_model = DDP(ret_model, device_ids=[rank])
+    ret_model = DDP(ret_model, device_ids=[rank], broadcast_buffers=False)
 
     ## General settings
 
@@ -1505,6 +1513,7 @@ def execute_test_DDP(
             test_loader,
             ret_model,
             device,
+            logger,
             with_tqdm=with_tqdm
         )
 
@@ -1588,6 +1597,7 @@ def execute_test_DDP(
 
 if __name__ == "__main__":
 
+    torch.autograd.set_detect_anomaly(True)
 
     datetime_now_str = datetime.now().strftime("%d-%m-%Y--%H:%M:%S")
 

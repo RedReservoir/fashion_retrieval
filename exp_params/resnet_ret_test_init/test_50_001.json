@@ -1,0 +1,45 @@
+{
+    "experiment_name": "ret_test_init/resnet_50_ret_init_001",
+    "settings": {
+        "device_idxs": [1],
+        "data_loading": {
+            "batch_size": 32,
+            "num_workers": 6
+        },
+        "backbone": {
+            "class": "ResNet50Backbone" 
+        },
+        "stage_1": {
+            "max_epochs": 30,
+            "optimizer": {
+                "class": "SGD",
+                "lr": 1e-4,
+                "momentum": 0.9
+            },
+            "scheduler": {
+                "class": "ExponentialLR",
+                "gamma": 0.95
+            },
+            "early_stopper": {
+                "patience": 5,
+                "min_delta": 0
+            }
+        },
+        "stage_2": {
+            "max_epochs": 30,
+            "optimizer": {
+                "class": "SGD",
+                "lr": 5e-5,
+                "momentum": 0.9
+            },
+            "scheduler": {
+                "class": "ExponentialLR",
+                "gamma": 0.95
+            },
+            "early_stopper": {
+                "patience": 5,
+                "min_delta": 0
+            }
+        }
+    }
+}

@@ -91,7 +91,8 @@ class EfficientNetB3Backbone(torch.nn.Module):
             self,
             batchnorm_momentum=None,
             batchnorm_track_runnning_stats=None,
-            batchnorm_eps=None
+            batchnorm_eps=None,
+            silu_inplace=None
             ):
         
         super(EfficientNetB3Backbone, self).__init__()
@@ -118,6 +119,14 @@ class EfficientNetB3Backbone(torch.nn.Module):
         if batchnorm_eps is not None:
             for layer in batchnorm_layers_list:
                 layer.eps = batchnorm_eps
+
+        # Inplace mods
+
+        silu_layers_list = self._get_silu_layers()
+
+        if silu_inplace is not None:
+            for layer in silu_layers_list:
+                layer.inplace = silu_inplace
 
         # Other parameters
 
@@ -173,6 +182,77 @@ class EfficientNetB3Backbone(torch.nn.Module):
 
         return batchnorm_layers_list
     
+
+    def _get_silu_layers(self):
+
+        silu_layers_list = []
+
+        silu_layers_list += [
+            self.features[0][2]
+        ]
+
+        silu_layers_list += [
+            self.features[1][idx].block[0][2] for idx in range(2)
+        ]
+
+        silu_layers_list += [
+            self.features[1][idx].block[1].activation for idx in range(2)
+        ]
+
+        silu_layers_list += [
+            self.features[2][idx_1].block[idx_2][2] for idx_1 in range(3) for idx_2 in range(2)
+        ]
+
+        silu_layers_list += [
+            self.features[2][idx].block[2].activation for idx in range(3)
+        ]
+
+        silu_layers_list += [
+            self.features[3][idx_1].block[idx_2][2] for idx_1 in range(3) for idx_2 in range(2)
+        ]
+
+        silu_layers_list += [
+            self.features[3][idx].block[2].activation for idx in range(3)
+        ]
+
+        silu_layers_list += [
+            self.features[4][idx_1].block[idx_2][2] for idx_1 in range(5) for idx_2 in range(2)
+        ]
+
+        silu_layers_list += [
+            self.features[4][idx].block[2].activation for idx in range(5)
+        ]
+
+        silu_layers_list += [
+            self.features[5][idx_1].block[idx_2][2] for idx_1 in range(5) for idx_2 in range(2)
+        ]
+
+        silu_layers_list += [
+            self.features[5][idx].block[2].activation for idx in range(5)
+        ]
+
+        silu_layers_list += [
+            self.features[6][idx_1].block[idx_2][2] for idx_1 in range(6) for idx_2 in range(2)
+        ]
+
+        silu_layers_list += [
+            self.features[6][idx].block[2].activation for idx in range(6)
+        ]
+
+        silu_layers_list += [
+            self.features[7][idx_1].block[idx_2][2] for idx_1 in range(2) for idx_2 in range(2)
+        ]
+
+        silu_layers_list += [
+            self.features[7][idx].block[2].activation for idx in range(2)
+        ]
+
+        silu_layers_list += [
+            self.features[8][2]
+        ]
+
+        return silu_layers_list
+
 
     
 class EfficientNetB4Backbone(torch.nn.Module):

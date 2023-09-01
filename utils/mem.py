@@ -49,6 +49,8 @@ def get_num_bytes(obj):
         for key, val in obj.items():
             num_bytes += get_num_bytes(key)
             num_bytes += get_num_bytes(val)
+    if type(obj) is torch.Tensor:
+        num_bytes += obj.nelement() * obj.element_size()
 
     return num_bytes
 

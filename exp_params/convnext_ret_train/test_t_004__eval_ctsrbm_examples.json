@@ -1,0 +1,42 @@
+{
+    "experiment_name": "ret_train/convnext_t/test_004",
+    "settings": {
+        "model_checkpoint": "best_stage_2_ckp.pth",
+        "device_idx": 0,
+        "data_loading": {
+            "batch_size": 32,
+            "num_workers": 6
+        },
+        "cons_imgs_chunk_size": 2000,
+        "train": {
+            "desired_cons_img_idxs": [
+                502,
+                1097,
+                1502,
+                2029,
+                2976
+            ],
+            "num_desired_shop_imgs": 10
+        },
+        "val": {
+            "desired_cons_img_idxs": [
+                257,
+                1176,
+                2509,
+                4550,
+                5125
+            ],
+            "num_desired_shop_imgs": 10
+        },
+        "test": {
+            "desired_cons_img_idxs": [
+                1024,
+                3815,
+                6343,
+                10021,
+                17199
+            ],
+            "num_desired_shop_imgs": 10
+        }
+    }
+}

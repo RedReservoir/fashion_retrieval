@@ -1511,7 +1511,7 @@ class ConsToShopClothRetrBM_NEW(Dataset):
             neg_img_filename_list_filename_local += "__" + self._neg_img_filename_list_id
         neg_img_filename_list_filename_local += ".txt"
         neg_img_filename_list_filename = os.path.join(self._dataset_dirname, "aux_NEW", neg_img_filename_list_filename_local)
-        
+
         if os.path.exists(neg_img_filename_list_filename) and self._neg_img_filename_list_id is not None: return
 
         neg_img_filename_list_file = open(neg_img_filename_list_filename, "w")
