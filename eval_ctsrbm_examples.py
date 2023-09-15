@@ -15,9 +15,10 @@ import torchvision
 from torch.utils.data import DataLoader, Subset
 
 from datasets import deep_fashion_ctsrbm
-from arch import backbones, models, heads
+from arch import models, heads
 
 from tqdm import tqdm
+from fashion_retrieval.arch import backbones_cnn
 
 import utils.mem
 import utils.list
@@ -62,15 +63,15 @@ def print_tensor_info(tensor, name, logger):
 def create_backbone(backbone_class):
 
     if backbone_class == "ResNet50Backbone":
-        backbone = backbones.ResNet50Backbone()
+        backbone = backbones_cnn.ResNet50Backbone()
     if backbone_class == "EfficientNetB3Backbone":
-        backbone = backbones.EfficientNetB3Backbone()
+        backbone = backbones_cnn.EfficientNetB3Backbone()
     if backbone_class == "EfficientNetB4Backbone":
-        backbone = backbones.EfficientNetB4Backbone()
+        backbone = backbones_cnn.EfficientNetB4Backbone()
     if backbone_class == "EfficientNetB5Backbone":
-        backbone = backbones.EfficientNetB5Backbone()
+        backbone = backbones_cnn.EfficientNetB5Backbone()
     if backbone_class == "ConvNeXtTinyBackbone":
-        backbone = backbones.ConvNeXtTinyBackbone(contiguous_after_permute=True)
+        backbone = backbones_cnn.ConvNeXtTinyBackbone(contiguous_after_permute=True)
 
     return backbone
 
@@ -415,7 +416,7 @@ if __name__ == "__main__":
     experiment_name = eval_params["experiment_name"]
     experiment_dirname = os.path.join(pathlib.Path.home(), "data", "fashion_retrieval", experiment_name)
 
-    log_filename = "eval_ctsrbm_examples_logs.txt"
+    log_filename = "eval_ctsrbm_examples__logs.txt"
     log_full_filename = os.path.join(experiment_dirname, log_filename)
     if os.path.exists(log_full_filename):
         os.remove(log_full_filename)
@@ -881,7 +882,7 @@ if __name__ == "__main__":
 
 
     eval_data_filename = os.path.join(
-        experiment_dirname, "eval_ctsrbm_examples_data.json"
+        experiment_dirname, "eval_ctsrbm_examples__data.json"
     )
 
     logger.print("Saving results to \"{:s}\"".format(

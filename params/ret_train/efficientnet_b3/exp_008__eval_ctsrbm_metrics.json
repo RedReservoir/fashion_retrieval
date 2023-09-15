@@ -1,0 +1,20 @@
+{
+  "experiment_name": "ret_train/efficientnet_b3/test_008",
+  "settings": {
+    "model_checkpoint": "best_stage_2_ckp.pth",
+    "device_idx": 2,
+    "data_loading": {
+      "batch_size": 32,
+      "num_workers": 6
+    },
+    "k_values": [
+      "same",
+      "all",
+      1,
+      3,
+      5,
+      10
+    ],
+    "cons_imgs_chunk_size": 2000
+  }
+}

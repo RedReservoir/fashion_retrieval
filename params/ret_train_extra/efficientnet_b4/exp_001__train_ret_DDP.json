@@ -1,0 +1,70 @@
+{
+    "experiment_name": "ret_train_extra/efficientnet_b4/exp_001",
+    "settings": {
+      "device_idxs": [0, 1, 2, 3, 4, 5, 6, 7],
+      "backbone": {
+        "class": "EfficientNetB4Backbone",
+        "batchnorm_track_runnning_stats": false
+      },
+      "stage_1": {
+        "max_epochs": 30,
+        "optimizer": {
+          "class": "SGD",
+          "lr": 1e-3,
+          "momentum": 0.9
+        },
+        "scheduler": {
+          "class": "ExponentialLR",
+          "gamma": 0.95
+        },
+        "early_stopper": {
+          "patience": 5,
+          "min_delta": 0
+        },
+        "data_loading": {
+          "batch_size": 16,
+          "num_workers": 4,
+          "grad_acc_iters": 1
+        },
+        "autocast": {
+            "enabled": false
+        },
+        "data_gradual_inc": {
+            "enabled": false
+        }
+      },
+      "stage_2": {
+        "max_epochs": 30,
+        "optimizer": {
+          "class": "SGD",
+          "lr": 1e-5,
+          "momentum": 0.9
+        },
+        "scheduler": {
+          "class": "ExponentialLR",
+          "gamma": 0.95
+        },
+        "early_stopper": {
+          "patience": 8,
+          "min_delta": 0
+        },
+        "data_loading": {
+          "batch_size": 4,
+          "num_workers": 4,
+          "grad_acc_iters": 4
+        },
+        "autocast": {
+            "enabled": false
+        },
+        "data_gradual_inc": {
+            "enabled": false
+        }
+      },
+      "test": {
+        "data_loading": {
+          "batch_size": 16,
+          "num_workers": 4
+        }
+      }
+    }
+  }

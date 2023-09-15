@@ -1,0 +1,20 @@
+{
+  "experiment_name": "ret_train/convnext_t/test_012",
+  "settings": {
+    "model_checkpoint": "best_stage_2_ckp.pth",
+    "device_idx": 4,
+    "data_loading": {
+      "batch_size": 32,
+      "num_workers": 6
+    },
+    "k_values": [
+      "same",
+      "all",
+      1,
+      3,
+      5,
+      10
+    ],
+    "cons_imgs_chunk_size": 2000
+  }
+}
