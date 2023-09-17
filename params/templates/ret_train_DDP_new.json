@@ -1,10 +1,9 @@
 {
     "experiment_name": "debug/test/test_000",
     "settings": {
-      "device_idxs": [0, 1],
+      "device_idxs": [0],
       "backbone": {
-        "class": "ResNet50Backbone",
-        "img_size": 576
+        "class": "CvTransformerB21I384D22kBackbone"
       },
       "ret_head": {
         "emb_size": 1024
@@ -13,7 +12,7 @@
         "cutdown_ratio": 0.10
       },
       "stage_1": {
-        "max_epochs": 2,
+        "max_epochs": 3,
         "optimizer": {
           "class": "SGD",
           "lr": 1e-3,
@@ -29,7 +28,7 @@
         },
         "data_loading": {
           "train_random_seed": 42,
-          "batch_size": 16,
+          "batch_size": 4,
           "num_workers": 4,
           "grad_acc_iters": 1
         },
@@ -41,7 +40,7 @@
         }
       },
       "stage_2": {
-        "max_epochs": 2,
+        "max_epochs": 3,
         "optimizer": {
           "class": "SGD",
           "lr": 1e-5,
@@ -57,9 +56,9 @@
         },
         "data_loading": {
           "train_random_seed": 42,
-          "batch_size": 8,
+          "batch_size": 4,
           "num_workers": 4,
-          "grad_acc_iters": 2
+          "grad_acc_iters": 1
         },
         "autocast": {
             "enabled": false
@@ -70,7 +69,7 @@
       },
       "test": {
         "data_loading": {
-          "batch_size": 16,
+          "batch_size": 4,
           "num_workers": 4
         }
       }
