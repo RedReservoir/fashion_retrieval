@@ -14,12 +14,12 @@ class SwinTransformerV2TinyBackbone(torch.nn.Module):
 
     def __init__(
             self,
-            img_size=256
+            img_size=None
         ):
         
         super(SwinTransformerV2TinyBackbone, self).__init__()
 
-        self.img_size = img_size
+        self.img_size = img_size if img_size is not None else 256
 
         # Model construction
 
@@ -65,12 +65,12 @@ class CvTransformerB21I384D22kBackbone(torch.nn.Module):
 
     def __init__(
             self,
-            img_size=384
+            img_size=None
         ):
         
         super(CvTransformerB21I384D22kBackbone, self).__init__()
 
-        self.img_size = img_size
+        self.img_size = img_size if img_size is not None else 384
 
         # Model construction
 
@@ -93,8 +93,20 @@ class CvTransformerB21I384D22kBackbone(torch.nn.Module):
 
     def get_image_transform(self):
 
+        return self._image_transform
+
+        #CONTINUE HERE
+
         image_transform = transformers.AutoImageProcessor.from_pretrained("microsoft/cvt-21-384-22k")
         image_transform.size["shortest_edge"] = self.img_size
         image_transform_corr = lambda t: torch.from_numpy(image_transform(t).pixel_values[0])
 
         return image_transform_corr
+
+
+    def _image_transform(t):
+
+        image_transform = transformers.AutoImageProcessor.from_pretrained("microsoft/cvt-21-384-22k")
+        image_transform.size["shortest_edge"] = self.img_size
+        t = torch.from_numpy(image_transform(t).pixel_values[0])
+        return t

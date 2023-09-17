@@ -1,7 +1,7 @@
 import torch
 import torchvision
 
-from arch import heads
+from fir.arch import heads
 
 
 

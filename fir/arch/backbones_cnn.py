@@ -671,12 +671,12 @@ class EfficientNetV2SmallBackbone(torch.nn.Module):
 
     def __init__(
             self,
-            img_size=384
+            img_size=None
         ):
         
         super(EfficientNetV2SmallBackbone, self).__init__()
 
-        self.img_size = img_size
+        self.img_size = img_size if img_size is not None else 384
 
         # Model construction
 

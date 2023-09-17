@@ -2,6 +2,7 @@ import os
 import shutil
 import sys
 import pathlib
+import dill
 import pickle as pkl
 import json
 import argparse
@@ -17,19 +18,18 @@ import torchvision
 
 from torch.utils.data import DataLoader, Subset
 
-from datasets import deep_fashion_ctsrbm
-from arch import backbones_cnn, backbones_trf, models, heads
+from fir.datasets import deep_fashion_ctsrbm
+from fir.arch import backbones_cnn, backbones_trf, models, heads
+
+import fir.utils.train
+import fir.utils.log
+import fir.utils.dict
+import fir.utils.list
+import fir.utils.mem
+import fir.utils.sig
+import fir.utils.time
 
 from tqdm import tqdm
-
-import utils.mem
-import utils.list
-import utils.train
-import utils.time
-import utils.log_new
-import utils.dict
-import utils.sig
-import utils.pkl
 
 from time import time
 from datetime import datetime
@@ -115,18 +115,29 @@ def create_backbone(backbone_options):
             batchnorm_track_runnning_stats=batchnorm_track_runnning_stats
         )
 
+    if backbone_class == "EfficientNetV2SmallBackbone":
+        backbone = backbones_cnn.EfficientNetV2SmallBackbone(
+            backbone_img_size
+        )
+    
     # ConvNeXt
 
     if backbone_class == "ConvNeXtTinyBackbone":
         backbone = backbones_cnn.ConvNeXtTinyBackbone(contiguous_after_permute=True)
     
+    # Cv Transformer
+    
+    if backbone_class == "CvTransformerB21I384D22kBackbone":
+        backbone = backbones_trf.CvTransformerB21I384D22kBackbone(
+            backbone_img_size
+        )
+
     # Swin Transformer
     
     if backbone_class == "SwinTransformerV2TinyBackbone":
         backbone = backbones_trf.SwinTransformerV2TinyBackbone(
             backbone_img_size
         )
-        
 
     return backbone
 
@@ -182,14 +193,14 @@ def create_early_stopper(
     patience = early_stopper_options["patience"]
     min_delta = early_stopper_options["min_delta"]
 
-    early_stopper = utils.train.EarlyStopper(patience, min_delta)
+    early_stopper = fir.utils.train.EarlyStopper(patience, min_delta)
 
     return early_stopper
 
 
 def create_best_tracker():
 
-    early_stopper = utils.train.BestTracker(0)
+    early_stopper = fir.utils.train.BestTracker(0)
 
     return early_stopper
 
@@ -513,7 +524,7 @@ def execute_stage_1_DDP(
     logger_streams = [log_full_filename]
     if not command_args.terminal_silent: logger_streams.append(sys.stdout)
 
-    logger = utils.log_new.Logger(logger_streams)
+    logger = fir.utils.log.Logger(logger_streams)
 
     sys.stderr = logger
 
@@ -545,7 +556,7 @@ def execute_stage_1_DDP(
     optimizer = create_optimizer(
         optimizer_params,
         exp_params["settings"]["stage_1"]["optimizer"],
-        batch_size,
+        exp_params["settings"]["stage_1"]["data_loading"]["batch_size"],
         num_devices
         )
 
@@ -619,8 +630,8 @@ def execute_stage_1_DDP(
 
     cutdown_ratio = exp_params["settings"]["data_loading"].get("cutdown_ratio", None)
     if cutdown_ratio is not None:
-        ctsrbm_train_idxs = utils.list.cutdown_list(ctsrbm_train_idxs, cutdown_ratio)
-        ctsrbm_val_idxs = utils.list.cutdown_list(ctsrbm_val_idxs, cutdown_ratio)
+        ctsrbm_train_idxs = fir.utils.list.cutdown_list(ctsrbm_train_idxs, cutdown_ratio)
+        ctsrbm_val_idxs = fir.utils.list.cutdown_list(ctsrbm_val_idxs, cutdown_ratio)
 
 
     # Validation dataloader initialization
@@ -644,7 +655,7 @@ def execute_stage_1_DDP(
 
     with_tqdm = (not command_args.no_tqdm) and (rank == 0)
 
-    grad_acc_iters = utils.dict.chain_get(
+    grad_acc_iters = fir.utils.dict.chain_get(
         exp_params,
         "settings", "stage_1", "data_loading", "grad_acc_iters",
         default=1
@@ -690,7 +701,7 @@ def execute_stage_1_DDP(
 
             if inc_cutdown_ratio != 1:
 
-                inc_cutdown_ctsrbm_train_idxs = utils.list.cutdown_list(inc_cutdown_ctsrbm_train_idxs, inc_cutdown_ratio)
+                inc_cutdown_ctsrbm_train_idxs = fir.utils.list.cutdown_list(inc_cutdown_ctsrbm_train_idxs, inc_cutdown_ratio)
                 
                 if rank == 0:
                     logger.print("  [Rank {:d}] Reduced size of train split to {:.2f}%".format(rank, inc_cutdown_ratio * 100))
@@ -734,7 +745,7 @@ def execute_stage_1_DDP(
 
         logger.print("    [Rank {:d}] Train epoch time: {:s}".format(
             rank,
-            utils.time.sprint_fancy_time_diff(train_epoch_time)
+            fir.utils.time.sprint_fancy_time_diff(train_epoch_time)
         ))
 
         torch.distributed.barrier()
@@ -770,7 +781,7 @@ def execute_stage_1_DDP(
 
         logger.print("    [Rank {:d}] Val epoch time:   {:s}".format(
             rank,
-            utils.time.sprint_fancy_time_diff(train_epoch_time)
+            fir.utils.time.sprint_fancy_time_diff(train_epoch_time)
         ))
 
         torch.distributed.barrier()
@@ -810,7 +821,7 @@ def execute_stage_1_DDP(
 
         if rank == 0:
             logger.print("    [Rank {:d}] Current memory usage:".format(rank))
-            logger.print(utils.mem.sprint_memory_usage(exp_params["settings"]["device_idxs"], num_spaces=6))
+            logger.print(fir.utils.mem.sprint_memory_usage(exp_params["settings"]["device_idxs"], num_spaces=6))
         
         ## Training conditions and checkpoints
 
@@ -828,7 +839,7 @@ def execute_stage_1_DDP(
 
             ## Checkpoint saving
 
-            with utils.sig.DelayedInterrupt():
+            with fir.utils.sig.DelayedInterrupt():
 
                 ## Save best component checkpoint
 
@@ -946,7 +957,7 @@ def execute_stage_2_DDP(
     logger_streams = [log_full_filename]
     if not command_args.terminal_silent: logger_streams.append(sys.stdout)
 
-    logger = utils.log_new.Logger(logger_streams)
+    logger = fir.utils.log.Logger(logger_streams)
 
     sys.stderr = logger
 
@@ -981,7 +992,7 @@ def execute_stage_2_DDP(
     optimizer = create_optimizer(
         optimizer_params,
         exp_params["settings"]["stage_2"]["optimizer"],
-        batch_size,
+        exp_params["settings"]["stage_2"]["data_loading"]["batch_size"],
         num_devices
         )
 
@@ -1063,8 +1074,8 @@ def execute_stage_2_DDP(
 
     cutdown_ratio = exp_params["settings"]["data_loading"].get("cutdown_ratio", None)
     if cutdown_ratio is not None:
-        ctsrbm_train_idxs = utils.list.cutdown_list(ctsrbm_train_idxs, cutdown_ratio)
-        ctsrbm_val_idxs = utils.list.cutdown_list(ctsrbm_val_idxs, cutdown_ratio)
+        ctsrbm_train_idxs = fir.utils.list.cutdown_list(ctsrbm_train_idxs, cutdown_ratio)
+        ctsrbm_val_idxs = fir.utils.list.cutdown_list(ctsrbm_val_idxs, cutdown_ratio)
 
 
     # Validation dataloader initialization
@@ -1088,7 +1099,7 @@ def execute_stage_2_DDP(
 
     with_tqdm = (not command_args.no_tqdm) and (rank == 0)
 
-    grad_acc_iters = utils.dict.chain_get(
+    grad_acc_iters = fir.utils.dict.chain_get(
         exp_params,
         "settings", "stage_2", "data_loading", "grad_acc_iters",
         default=1
@@ -1134,7 +1145,7 @@ def execute_stage_2_DDP(
 
             if inc_cutdown_ratio != 1:
 
-                inc_cutdown_ctsrbm_train_idxs = utils.list.cutdown_list(inc_cutdown_ctsrbm_train_idxs, inc_cutdown_ratio)
+                inc_cutdown_ctsrbm_train_idxs = fir.utils.list.cutdown_list(inc_cutdown_ctsrbm_train_idxs, inc_cutdown_ratio)
                 
                 if rank == 0:
                     logger.print("  [Rank {:d}] Reduced size of train split to {:.2f}%".format(rank, inc_cutdown_ratio * 100))
@@ -1177,7 +1188,7 @@ def execute_stage_2_DDP(
 
         logger.print("    [Rank {:d}] Train epoch time: {:s}".format(
             rank,
-            utils.time.sprint_fancy_time_diff(train_epoch_time)
+            fir.utils.time.sprint_fancy_time_diff(train_epoch_time)
         ))
 
         torch.distributed.barrier()
@@ -1213,7 +1224,7 @@ def execute_stage_2_DDP(
 
         logger.print("    [Rank {:d}] Val epoch time:   {:s}".format(
             rank,
-            utils.time.sprint_fancy_time_diff(train_epoch_time)
+            fir.utils.time.sprint_fancy_time_diff(train_epoch_time)
         ))
 
         torch.distributed.barrier()
@@ -1253,7 +1264,7 @@ def execute_stage_2_DDP(
 
         if rank == 0:
             logger.print("    [Rank {:d}] Current memory usage:".format(rank))
-            logger.print(utils.mem.sprint_memory_usage(exp_params["settings"]["device_idxs"], num_spaces=6))
+            logger.print(fir.utils.mem.sprint_memory_usage(exp_params["settings"]["device_idxs"], num_spaces=6))
         
         ## Training conditions and checkpoints
 
@@ -1271,7 +1282,7 @@ def execute_stage_2_DDP(
 
             ## Checkpoint saving
 
-            with utils.sig.DelayedInterrupt():
+            with fir.utils.sig.DelayedInterrupt():
 
                 ## Save best component checkpoint
 
@@ -1386,7 +1397,7 @@ def execute_test_DDP(
     logger_streams = [log_full_filename]
     if not command_args.terminal_silent: logger_streams.append(sys.stdout)
 
-    logger = utils.log_new.Logger(logger_streams)
+    logger = fir.utils.log.Logger(logger_streams)
 
     sys.stderr = logger
 
@@ -1438,7 +1449,7 @@ def execute_test_DDP(
 
     cutdown_ratio = exp_params["settings"]["data_loading"].get("cutdown_ratio", None)
     if cutdown_ratio is not None:
-        ctsrbm_test_idxs = utils.list.cutdown_list(ctsrbm_test_idxs, cutdown_ratio)
+        ctsrbm_test_idxs = fir.utils.list.cutdown_list(ctsrbm_test_idxs, cutdown_ratio)
     
 
     # Test dataloader initialization
@@ -1499,7 +1510,7 @@ def execute_test_DDP(
 
         logger.print("  [Rank {:d}] Test epoch time:  {:s}".format(
             rank,
-            utils.time.sprint_fancy_time_diff(test_epoch_time)
+            fir.utils.time.sprint_fancy_time_diff(test_epoch_time)
         ))
 
         torch.distributed.barrier()
@@ -1515,7 +1526,7 @@ def execute_test_DDP(
 
         if rank == 0:
             logger.print("  [Rank {:d}] Current memory usage:".format(rank))
-            logger.print(utils.mem.sprint_memory_usage(exp_params["settings"]["device_idxs"], num_spaces=4))
+            logger.print(fir.utils.mem.sprint_memory_usage(exp_params["settings"]["device_idxs"], num_spaces=4))
         
         test_epoch_time_list_mp[rank] = test_epoch_time
         test_mean_loss_list_mp[rank] = test_mean_loss
@@ -1536,7 +1547,7 @@ def execute_test_DDP(
 
             ## Checkpoint saving
 
-            with utils.sig.DelayedInterrupt():
+            with fir.utils.sig.DelayedInterrupt():
 
                 ## Save experiment data
 
@@ -1638,7 +1649,7 @@ if __name__ == "__main__":
     logger_streams = [log_full_filename]
     if not command_args.terminal_silent: logger_streams.append(sys.stdout)
 
-    logger = utils.log_new.Logger(logger_streams)
+    logger = fir.utils.log.Logger(logger_streams)
 
     sys.stderr = logger
     
@@ -1702,7 +1713,7 @@ if __name__ == "__main__":
 
     torch.cuda.empty_cache()
 
-    exp_data["settings"]["gpu_usage"] = utils.mem.list_gpu_data(device_idxs)
+    exp_data["settings"]["gpu_usage"] = fir.utils.mem.list_gpu_data(device_idxs)
     exp_data["settings"]["hostname"] = socket.gethostname()
     exp_data["settings"]["master_port"] = command_args.master_port
 
@@ -1714,7 +1725,7 @@ if __name__ == "__main__":
 
     # Initialize experiment data
 
-    if utils.dict.chain_get(exp_data, "settings", "stage_1") is None:
+    if fir.utils.dict.chain_get(exp_data, "settings", "stage_1") is None:
         exp_data = initialize_stage_1_exp_data(exp_data, exp_params)
 
     # Check if stage is finished
@@ -1764,7 +1775,7 @@ if __name__ == "__main__":
 
     # Initialize experiment data
 
-    if utils.dict.chain_get(exp_data, "settings", "stage_2") is None:
+    if fir.utils.dict.chain_get(exp_data, "settings", "stage_2") is None:
         exp_data = initialize_stage_2_exp_data(exp_data, exp_params)
 
     # Check if stage is finished
@@ -1814,7 +1825,7 @@ if __name__ == "__main__":
 
     # Initialize experiment data
 
-    if utils.dict.chain_get(exp_data, "settings", "test") is None:
+    if fir.utils.dict.chain_get(exp_data, "settings", "test") is None:
         exp_data = initialize_test_exp_data(exp_data, exp_params)
 
     # Check if stage is finished
