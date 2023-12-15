@@ -1,0 +1,46 @@
+{
+    "experiment_name": "change_test/convnext_t_s1/run_002_002",
+    "settings": {
+        "device_idxs": [2, 4, 5, 6],
+        "backbone": {
+            "class": "ConvNeXtTinyBackbone",
+            "img_size": 224
+        },
+        "head": {
+            "class": "RetHead",
+            "emb_size": 1024
+        },
+        "data_loading": {
+            "cutdown_ratio": 1,
+            "neg_img_filename_list_id": "test_OLD"
+        },
+        "stage_1": {
+            "max_epochs": 5,
+            "optimizer": {
+                "class": "SGD",
+                "lr": 1e-2,
+                "momentum": 0.9
+            },
+            "scheduler": {
+                "class": "ExponentialLR",
+                "gamma": 0.95
+            },
+            "early_stopper": {
+                "patience": 5,
+                "min_delta": 0
+            },
+            "data_loading": {
+                "train_random_seed": 42,
+                "batch_size": 16,
+                "num_workers": 4,
+                "grad_acc_iters": 1
+            },
+            "autocast": {
+                "enabled": false
+            },
+            "data_gradual_inc": {
+                "enabled": false
+            }
+        }
+    }
+}

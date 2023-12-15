@@ -1,0 +1,20 @@
+{
+    "experiment_name": "ret_train_old_smpl/swint_v2_t_s2/run_002",
+    "settings": {
+      "model_checkpoint": "train_ret_DDP_stage_2__best_ckp.pth",
+      "device_idx": 7,
+      "data_loading": {
+        "batch_size": 64,
+        "num_workers": 4
+      },
+      "k_values": [
+        "same",
+        "all",
+        1,
+        10,
+        20,
+        50
+      ],
+      "cons_imgs_chunk_size": 2000
+    }
+  }

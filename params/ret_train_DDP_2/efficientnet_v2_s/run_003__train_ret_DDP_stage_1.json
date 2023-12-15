@@ -1,0 +1,49 @@
+{
+    "experiment_name": "ret_train_DDP_2/efficientnet_v2_s/run_003",
+    "settings": {
+        "device_idxs": [
+            0,
+            1,
+            2,
+            3
+        ],
+        "backbone": {
+            "class": "EfficientNetV2SmallBackbone",
+            "img_size": 224
+        },
+        "ret_head": {
+            "emb_size": 1024
+        },
+        "data_loading": {
+            "cutdown_ratio": 1
+        },
+        "stage_1": {
+            "max_epochs": 30,
+            "optimizer": {
+                "class": "SGD",
+                "lr": 0.003,
+                "momentum": 0.9
+            },
+            "scheduler": {
+                "class": "ExponentialLR",
+                "gamma": 0.95
+            },
+            "early_stopper": {
+                "patience": 5,
+                "min_delta": 1e-06
+            },
+            "data_loading": {
+                "train_random_seed": 42,
+                "batch_size": 8,
+                "num_workers": 4,
+                "grad_acc_iters": 1
+            },
+            "autocast": {
+                "enabled": false
+            },
+            "data_gradual_inc": {
+                "enabled": false
+            }
+        }
+    }
+}

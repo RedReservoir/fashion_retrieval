@@ -5,9 +5,6 @@ import pathlib
 import pickle as pkl
 import json
 import argparse
-import random as rd
-
-from contextlib import nullcontext
 
 import numpy as np
 import pandas as pd
@@ -17,20 +14,20 @@ import torchvision
 
 from torch.utils.data import DataLoader, Subset
 
-from datasets import deep_fashion_ctsrbm
-from arch import models, heads
+from src.datasets import deep_fashion
+from src.comps import backbones_cnn, heads
 
 from tqdm import tqdm
-from fashion_retrieval.arch import backbones_cnn
 
-import utils.mem
-import utils.list
-import utils.train
-import utils.time
-import utils.log
-import utils.dict
-import utils.sig
-import utils.pkl
+import src.utils.memory
+import src.utils.list
+import src.utils.train
+import src.utils.time
+import src.utils.log
+import src.utils.dict
+import src.utils.signal
+import src.utils.pkl
+import src.utils.nvgpu
 
 from time import time
 from datetime import datetime
@@ -45,14 +42,28 @@ from torch.distributed import init_process_group, destroy_process_group
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-import pprint
-
 
 
 ########
 # COMPONENT FUNCTIONS
 ########
 
+
+
+def create_backbone(backbone_class):
+
+    if backbone_class == "ResNet50Backbone":
+        backbone = backbones_cnn.ResNet50Backbone()
+    if backbone_class == "EfficientNetB3Backbone":
+        backbone = backbones_cnn.EfficientNetB3Backbone()
+    if backbone_class == "EfficientNetB4Backbone":
+        backbone = backbones_cnn.EfficientNetB4Backbone(batchnorm_eps=1e-4)
+    if backbone_class == "EfficientNetB5Backbone":
+        backbone = backbones_cnn.EfficientNetB5Backbone(batchnorm_eps=1e-4)
+    if backbone_class == "ConvNeXtTinyBackbone":
+        backbone = backbones_cnn.ConvNeXtTinyBackboneOLD(contiguous_after_permute=True)
+
+    return backbone
 
 
 def save_experiment_checkpoint(
@@ -62,120 +73,332 @@ def save_experiment_checkpoint(
         optimizer,
         scheduler,
         early_stopper,
-        best_tracker,
-        grad_scaler
+        best_tracker
         ):
 
-    experiment_checkpoint = {}
-
-    experiment_checkpoint["backbone_state_dict"] = backbone.state_dict()
-    experiment_checkpoint["ret_head_state_dict"] = ret_head.state_dict()
-    experiment_checkpoint["optimizer_state_dict"] = optimizer.state_dict()
-    experiment_checkpoint["scheduler_state_dict"] = scheduler.state_dict()
-    experiment_checkpoint["early_stopper_state_dict"] = early_stopper.state_dict()
-    experiment_checkpoint["best_tracker_state_dict"] = best_tracker.state_dict()
-    if grad_scaler is not None:
-        experiment_checkpoint["grad_scaler_state_dict"] = grad_scaler.state_dict()
+    experiment_checkpoint = {
+        "backbone_state_dict": backbone.state_dict(),
+        "ret_head_state_dict": ret_head.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "scheduler_state_dict": scheduler.state_dict(),
+        "early_stopper_state_dict": early_stopper.state_dict(),
+        "best_tracker_state_dict": best_tracker.state_dict()
+        }
 
     torch.save(experiment_checkpoint, experiment_checkpoint_filename)
 
 
-def create_backbone(backbone_options):
-
-    backbone_class = backbone_options["class"]
-
-    if backbone_class == "ResNet50Backbone":
-        backbone = backbones_cnn.ResNet50Backbone()
-    if backbone_class == "EfficientNetB2Backbone":
-        batchnorm_track_runnning_stats = backbone_options.get("batchnorm_track_runnning_stats", None)
-        backbone = backbones_cnn.EfficientNetB2Backbone(
-            batchnorm_track_runnning_stats=batchnorm_track_runnning_stats
-        )
-    if backbone_class == "EfficientNetB3Backbone":
-        batchnorm_track_runnning_stats = backbone_options.get("batchnorm_track_runnning_stats", None)
-        backbone = backbones_cnn.EfficientNetB3Backbone(
-            batchnorm_track_runnning_stats=batchnorm_track_runnning_stats
-        )
-    if backbone_class == "EfficientNetB4Backbone":
-        batchnorm_track_runnning_stats = backbone_options.get("batchnorm_track_runnning_stats", None)
-        backbone = backbones_cnn.EfficientNetB4Backbone(
-            batchnorm_track_runnning_stats=batchnorm_track_runnning_stats
-        )
-    if backbone_class == "EfficientNetB5Backbone":
-        batchnorm_track_runnning_stats = backbone_options.get("batchnorm_track_runnning_stats", None)
-        backbone = backbones_cnn.EfficientNetB5Backbone(
-            batchnorm_track_runnning_stats=batchnorm_track_runnning_stats
-        )
-    if backbone_class == "ConvNeXtTinyBackbone":
-        backbone = backbones_cnn.ConvNeXtTinyBackbone(contiguous_after_permute=True)
-
-    return backbone
-
-
-def create_ret_head(backbone):
-
-    ret_head = heads.RetHead(backbone.out_shape, 1024)
-
-    return ret_head
-
-
-def create_optimizer(
-        optimizer_params,
-        optimizer_options,
-        num_devices
+def load_stage_1_experiment_checkpoint(
+        stage_1_experiment_checkpoint_filename,
+        exp_params,
+        device
         ):
-    
-    optimizer_class = optimizer_options["class"]
+
+    # Load checkpoint
+
+    experiment_checkpoint = torch.load(stage_1_experiment_checkpoint_filename)
+
+    # Backbone
+
+    backbone_class = exp_params["settings"]["backbone"]["class"]
+
+    backbone = create_backbone(backbone_class).to(device)
+
+    backbone.load_state_dict(experiment_checkpoint["backbone_state_dict"])
+
+    # Heads
+
+    ret_head = heads.RetHead(backbone.out_shape, 1024).to(device)
+
+    ret_head.load_state_dict(experiment_checkpoint["ret_head_state_dict"])
+
+    # Optimizer
+
+    optimizer_params = ret_head.parameters()
+
+    num_devices = len(exp_params["settings"]["device_idxs"])
+    optimizer_class = exp_params["settings"]["stage_1"]["optimizer"]["class"]
     
     if optimizer_class == "Adam":
-        lr = optimizer_options["lr"] * num_devices
-        optimizer = torch.optim.Adam(optimizer_params, lr)
+        optimizer = torch.optim.Adam(optimizer_params)
     if optimizer_class == "SGD":
-        lr = optimizer_options["lr"] * num_devices
-        momentum = optimizer_options["momentum"]
-        optimizer = torch.optim.SGD(optimizer_params, lr, momentum)
+        lr = exp_params["settings"]["stage_1"]["optimizer"]["lr"] * num_devices
+        optimizer = torch.optim.SGD(optimizer_params, lr)
 
-    return optimizer
+    optimizer.load_state_dict(experiment_checkpoint["optimizer_state_dict"])
 
+    # Scheduler
 
-def create_scheduler(
-        optimizer,
-        scheduler_options
-        ):
-
-    scheduler_class = scheduler_options["class"]
+    scheduler_class = exp_params["settings"]["stage_1"]["scheduler"]["class"]
 
     if scheduler_class == "ExponentialLR":
-        gamma = scheduler_options["gamma"]
+        gamma = exp_params["settings"]["stage_1"]["scheduler"]["gamma"]
         scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma)
 
-    return scheduler
+    scheduler.load_state_dict(experiment_checkpoint["scheduler_state_dict"])
+
+    # Early stopper
+
+    early_stopper = src.utils.train.EarlyStopper()
+
+    early_stopper.load_state_dict(experiment_checkpoint["early_stopper_state_dict"])
+
+    # Best tracker
+
+    best_tracker = src.utils.train.BestTracker()
+
+    best_tracker.load_state_dict(experiment_checkpoint["best_tracker_state_dict"])
+
+    return (
+        backbone,
+        ret_head,
+        optimizer,
+        scheduler,
+        early_stopper,
+        best_tracker
+    )
 
 
-def create_early_stopper(
-        early_stopper_options
+def load_stage_2_experiment_checkpoint(
+        stage_2_experiment_checkpoint_filename,
+        exp_params,
+        device
         ):
 
-    patience = early_stopper_options["patience"]
-    min_delta = early_stopper_options["min_delta"]
+    # Load checkpoint
 
-    early_stopper = utils.train.EarlyStopper(patience, min_delta)
+    experiment_checkpoint = torch.load(stage_2_experiment_checkpoint_filename)
 
-    return early_stopper
+    # Backbone
+
+    backbone_class = exp_params["settings"]["backbone"]["class"]
+
+    backbone = create_backbone(backbone_class).to(device)
+
+    backbone.load_state_dict(experiment_checkpoint["backbone_state_dict"])
+
+    # Heads
+
+    ret_head = heads.RetHead(backbone.out_shape, 1024).to(device)
+
+    ret_head.load_state_dict(experiment_checkpoint["ret_head_state_dict"])
+
+    # Optimizer
+
+    optimizer_params = chain(
+        backbone.parameters(),
+        ret_head.parameters()
+    )
+
+    num_devices = len(exp_params["settings"]["device_idxs"])
+    optimizer_class = exp_params["settings"]["stage_2"]["optimizer"]["class"]
+    
+    if optimizer_class == "Adam":
+        optimizer = torch.optim.Adam(optimizer_params)
+    if optimizer_class == "SGD":
+        lr = exp_params["settings"]["stage_2"]["optimizer"]["lr"] * num_devices
+        optimizer = torch.optim.SGD(optimizer_params, lr)
+
+    optimizer.load_state_dict(experiment_checkpoint["optimizer_state_dict"])
+
+    # Scheduler
+
+    scheduler_class = exp_params["settings"]["stage_2"]["scheduler"]["class"]
+
+    if scheduler_class == "ExponentialLR":
+
+        gamma = exp_params["settings"]["stage_1"]["scheduler"]["gamma"]
+        scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma)
+
+    scheduler.load_state_dict(experiment_checkpoint["scheduler_state_dict"])
+
+    # Early stopper
+
+    early_stopper = src.utils.train.EarlyStopper()
+
+    early_stopper.load_state_dict(experiment_checkpoint["early_stopper_state_dict"])
+
+    # Best tracker
+
+    best_tracker = src.utils.train.BestTracker()
+
+    best_tracker.load_state_dict(experiment_checkpoint["best_tracker_state_dict"])
+
+    return (
+        backbone,
+        ret_head,
+        optimizer,
+        scheduler,
+        early_stopper,
+        best_tracker
+    )
 
 
-def create_best_tracker():
+def initialize_stage_1_components(exp_params, device):
 
-    early_stopper = utils.train.BestTracker(0)
+    # Backbone
 
-    return early_stopper
+    backbone_class = exp_params["settings"]["backbone"]["class"]
+
+    backbone = create_backbone(backbone_class).to(device)
+
+    # Heads
+
+    ret_head = heads.RetHead(backbone.out_shape, 1024).to(device)
+    
+    # Optimizer
+
+    optimizer_params = ret_head.parameters()
+
+    num_devices = len(exp_params["settings"]["device_idxs"])
+    optimizer_class = exp_params["settings"]["stage_1"]["optimizer"]["class"]
+
+    if optimizer_class == "Adam":
+
+        lr = exp_params["settings"]["stage_1"]["optimizer"]["lr"] * num_devices
+
+        optimizer = torch.optim.Adam(
+            optimizer_params,
+            lr=lr
+        )
+
+    if optimizer_class == "SGD":
+
+        lr = exp_params["settings"]["stage_1"]["optimizer"]["lr"] * num_devices
+        momentum = exp_params["settings"]["stage_1"]["optimizer"]["momentum"]
+
+        optimizer = torch.optim.SGD(
+            optimizer_params,
+            lr=lr,
+            momentum=momentum
+        )
+
+    # Scheduler
+
+    scheduler_class = exp_params["settings"]["stage_1"]["scheduler"]["class"]
+
+    if scheduler_class == "ExponentialLR":
+
+        gamma = exp_params["settings"]["stage_1"]["scheduler"]["gamma"]
+
+        scheduler = torch.optim.lr_scheduler.ExponentialLR(
+            optimizer,
+            gamma=gamma
+        )
+
+    # Early stopper
+
+    patience = exp_params["settings"]["stage_1"]["early_stopper"]["patience"]
+    min_delta = exp_params["settings"]["stage_1"]["early_stopper"]["min_delta"]
+
+    early_stopper = src.utils.train.EarlyStopper(
+        patience=patience,
+        min_delta=min_delta
+    )
+
+    # Best tracker
+
+    best_tracker = src.utils.train.BestTracker()
+
+    return (
+        backbone,
+        ret_head,
+        optimizer,
+        scheduler,
+        early_stopper,
+        best_tracker
+    )
 
 
-def create_grad_scaler():
+def initialize_stage_2_components(
+        best_stage_1_experiment_checkpoint_filename,
+        exp_params,
+        device
+        ):
 
-    grad_scaler = torch.cuda.amp.GradScaler()
+    # Load checkpoint
 
-    return grad_scaler
+    experiment_checkpoint = torch.load(best_stage_1_experiment_checkpoint_filename)
+
+    # Backbone
+
+    backbone_class = exp_params["settings"]["backbone"]["class"]
+
+    backbone = create_backbone(backbone_class).to(device)
+
+    backbone.load_state_dict(experiment_checkpoint["backbone_state_dict"])
+
+    # Heads
+
+    ret_head = heads.RetHead(backbone.out_shape, 1024).to(device)
+
+    ret_head.load_state_dict(experiment_checkpoint["ret_head_state_dict"])
+
+    # Optimizer
+
+    optimizer_params = chain(
+        backbone.parameters(),
+        ret_head.parameters()
+    )
+
+    num_devices = len(exp_params["settings"]["device_idxs"])
+    optimizer_class = exp_params["settings"]["stage_2"]["optimizer"]["class"]
+
+    if optimizer_class == "Adam":
+
+        lr = exp_params["settings"]["stage_2"]["optimizer"]["lr"] * num_devices
+
+        optimizer = torch.optim.Adam(
+            optimizer_params,
+            lr=lr
+        )
+
+    if optimizer_class == "SGD":
+
+        lr = exp_params["settings"]["stage_2"]["optimizer"]["lr"] * num_devices
+        momentum = exp_params["settings"]["stage_2"]["optimizer"]["momentum"]
+
+        optimizer = torch.optim.SGD(
+            optimizer_params,
+            lr=lr,
+            momentum=momentum
+        )
+
+    # Scheduler
+
+    scheduler_class = exp_params["settings"]["stage_2"]["scheduler"]["class"]
+
+    if scheduler_class == "ExponentialLR":
+
+        gamma = exp_params["settings"]["stage_2"]["scheduler"]["gamma"]
+
+        scheduler = torch.optim.lr_scheduler.ExponentialLR(
+            optimizer,
+            gamma=gamma
+        )
+
+    # Early stopper
+
+    patience = exp_params["settings"]["stage_2"]["early_stopper"]["patience"]
+    min_delta = exp_params["settings"]["stage_2"]["early_stopper"]["min_delta"]
+
+    early_stopper = src.utils.train.EarlyStopper(
+        patience=patience,
+        min_delta=min_delta
+    )
+
+    # Best tracker
+
+    best_tracker = src.utils.train.BestTracker()
+
+    return (
+        backbone,
+        ret_head,
+        optimizer,
+        scheduler,
+        early_stopper,
+        best_tracker
+    )
 
 
 
@@ -185,23 +408,23 @@ def create_grad_scaler():
 
 
 
-def save_json_dict(
-        json_filename,
-        json_dict
+def save_exp_data(
+        exp_data_filename,
+        exp_data
         ):
 
-    with open(json_filename, 'w') as json_file:
-        json.dump(json_dict, json_file, indent=4)
+    with open(exp_data_filename, 'w') as exp_data_file:
+        json.dump(exp_data, exp_data_file, indent=2)
 
 
-def load_json_dict(
-        json_filename
+def load_exp_data(
+        exp_data_filename
         ):
 
-    with open(json_filename, 'r') as json_file:
-        json_dict = json.load(json_file)
+    with open(exp_data_filename, 'r') as exp_data_file:
+        exp_data = json.load(exp_data_file)
 
-    return json_dict
+    return exp_data
 
 
 def initialize_stage_1_exp_data(
@@ -295,47 +518,6 @@ def initialize_test_exp_data(
 
 
 ########
-# DATASET AND LOADER FUNCTIONS
-########
-
-
-
-def get_backbone_image_transform(backbone_class):
-
-    if backbone_class == "ResNet50Backbone":
-        backbone_image_transform = torchvision.models.ResNet50_Weights.DEFAULT.transforms()
-    if backbone_class == "EfficientNetB2Backbone":
-        backbone_image_transform = torchvision.models.EfficientNet_B2_Weights.DEFAULT.transforms()
-    if backbone_class == "EfficientNetB3Backbone":
-        backbone_image_transform = torchvision.models.EfficientNet_B3_Weights.DEFAULT.transforms()
-    if backbone_class == "EfficientNetB4Backbone":
-        backbone_image_transform = torchvision.models.EfficientNet_B4_Weights.DEFAULT.transforms()
-    if backbone_class == "EfficientNetB5Backbone":
-        backbone_image_transform = torchvision.models.EfficientNet_B5_Weights.DEFAULT.transforms()
-    if backbone_class == "ConvNeXtTinyBackbone":
-        backbone_image_transform = torchvision.models.ConvNeXt_Tiny_Weights.DEFAULT.transforms()
-
-    return backbone_image_transform
-
-
-def compute_gradual_inc_cutdown_ratio(
-        current_epoch_num,
-        dgi_num_epochs,
-        dgi_init_ratio
-        ):
-
-    cutdown_ratio = 1
-
-    if current_epoch_num == 1:
-        cutdown_ratio = dgi_init_ratio
-    elif 2 <= current_epoch_num and current_epoch_num <= dgi_num_epochs - 1:
-        cutdown_ratio = dgi_init_ratio + ((1 - dgi_init_ratio) / (2 ** (dgi_num_epochs - current_epoch_num)))
-
-    return cutdown_ratio
-
-
-
-########
 # TRAIN & EVAL FUNCTIONS
 ########
 
@@ -345,55 +527,41 @@ def train_epoch(
         data_loader,
         ret_model,
         optimizer,
-        grad_scaler,
+        scaler,
         device,
         logger,
-        grad_acc_iters=1,
+        max_acc_iter=1,
         with_tqdm=True
     ):
 
     ret_model.train()
 
     total_loss_item = 0
-    curr_grad_acc_iter = 0
-
-    with_amp = grad_scaler is not None
+    curr_acc_iter = 0
 
     loader_gen = data_loader
     if with_tqdm: loader_gen = tqdm(loader_gen)
 
     for batch in loader_gen:
             
-        batch_loss = batch_evaluation(batch, ret_model, device, logger, with_amp=with_amp)
+        batch_loss = batch_evaluation(batch, ret_model, device, logger)
         total_loss_item += batch_loss.sum().item()
 
-        if grad_scaler is not None:
-            grad_scaler.scale(batch_loss.mean() / grad_acc_iters).backward()
-        else:
-            (batch_loss.mean() / grad_acc_iters).backward()
+        scaler.scale(batch_loss.mean() / max_acc_iter).backward()
+        curr_acc_iter += 1
 
-        curr_grad_acc_iter += 1
+        if curr_acc_iter == max_acc_iter:
 
-        if curr_grad_acc_iter == grad_acc_iters:
-
-            if grad_scaler is not None:
-                grad_scaler.step(optimizer)
-                grad_scaler.update()
-            else:
-                optimizer.step()
-
+            scaler.step(optimizer)
+            scaler.update()
             optimizer.zero_grad()
 
-            curr_grad_acc_iter = 0
+            curr_acc_iter = 0
 
-    if curr_grad_acc_iter > 0:
+    if curr_acc_iter > 0:
 
-        if grad_scaler is not None:
-            grad_scaler.step(optimizer)
-            grad_scaler.update()
-        else:
-            optimizer.step()
-
+        scaler.step(optimizer)
+        scaler.update()
         optimizer.zero_grad()
 
     return total_loss_item
@@ -418,7 +586,7 @@ def eval_epoch(
 
         for batch in loader_gen:
 
-            batch_loss = batch_evaluation(batch, ret_model, device, logger, with_amp=False)
+            batch_loss = batch_evaluation(batch, ret_model, device, logger)
             total_loss_item += batch_loss.sum().item()
 
     return total_loss_item
@@ -428,15 +596,14 @@ def batch_evaluation(
         batch,
         ret_model,
         device,
-        logger,
-        with_amp
+        logger
     ):
 
     anc_imgs = batch[0].to(device)
     pos_imgs = batch[1].to(device)
     neg_imgs = batch[2].to(device)
 
-    with torch.cuda.amp.autocast() if with_amp else nullcontext():
+    with torch.cuda.amp.autocast():
 
         anc_emb = ret_model(anc_imgs)
         pos_emb = ret_model(pos_imgs)
@@ -477,7 +644,6 @@ def execute_stage_1_DDP(
     val_epoch_time_list_mp,
     train_mean_loss_list_mp,
     val_mean_loss_list_mp,
-    dataset_random_seed_mp,
     finished_mp
 ):
 
@@ -486,53 +652,82 @@ def execute_stage_1_DDP(
     experiment_name = exp_params["experiment_name"]
     experiment_dirname = os.path.join(pathlib.Path.home(), "data", "fashion_retrieval", experiment_name)
 
-    log_filename = "train_ret_DDP__logs.txt"
+    log_filename = "exp_logs.txt"
     log_full_filename = os.path.join(experiment_dirname, log_filename)
 
     logger_streams = [log_full_filename]
-    if not command_args.terminal_silent: logger_streams.append(sys.stdout)
+    if not command_args.silent: logger_streams.append(sys.stdout)
 
-    logger = utils.log.Logger(logger_streams)
+    logger = src.utils.log.Logger(logger_streams)
 
     # PyTorch DDP stuff
 
+    logger.print("  [Rank {:d}] DDP Setup Preparing...".format(rank))
+
     os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "{:d}".format(command_args.master_port)
+    os.environ["MASTER_PORT"] = "12355"
 
     init_process_group(backend="nccl", rank=rank, world_size=world_size)
 
     device = torch.device(rank)
     
+    logger.print("  [Rank {:d}] DDP Setup Ready".format(rank))
+
     # Dataset initialization
 
-    backbone_image_transform = get_backbone_image_transform(exp_params["settings"]["backbone"]["class"])
+    logger.print("  [Rank {:d}] Data Preparing...".format(rank))
+
+    backbone_class = exp_params["settings"]["backbone"]["class"]
+
+    if backbone_class == "ResNet50Backbone":
+        backbone_image_transform = torchvision.models.ResNet50_Weights.DEFAULT.transforms()
+    if backbone_class == "EfficientNetB3Backbone":
+        backbone_image_transform = torchvision.models.EfficientNet_B3_Weights.DEFAULT.transforms()
+    if backbone_class == "EfficientNetB4Backbone":
+        backbone_image_transform = torchvision.models.EfficientNet_B4_Weights.DEFAULT.transforms()
+    if backbone_class == "EfficientNetB5Backbone":
+        backbone_image_transform = torchvision.models.EfficientNet_B5_Weights.DEFAULT.transforms()
+    if backbone_class == "ConvNeXtTinyBackbone":
+        backbone_image_transform = torchvision.models.ConvNeXt_Tiny_Weights.DEFAULT.transforms()
+
     backbone_image_transform.antialias = True
 
     ctsrbm_dataset_dir = os.path.join(pathlib.Path.home(), "data", "DeepFashion", "Consumer-to-shop Clothes Retrieval Benchmark")
 
-    ctsrbm_dataset = deep_fashion_ctsrbm.ConsToShopClothRetrBmkDataset(ctsrbm_dataset_dir, img_transform=backbone_image_transform, neg_img_filename_list_id="test")
+    ctsrbm_dataset = deep_fashion.ConsToShopClothRetrBM_NEW(ctsrbm_dataset_dir, img_transform=backbone_image_transform, neg_img_filename_list_id="test")
 
-    ctsrbm_train_idxs = ctsrbm_dataset.get_subset_indices(split="train")
-    ctsrbm_val_idxs = ctsrbm_dataset.get_subset_indices(split="val")
+    train_idxs = ctsrbm_dataset.get_split_mask_idxs("train")
+    val_idxs = ctsrbm_dataset.get_split_mask_idxs("val")
 
-    if rank == 0:
-        dataset_random_seed_mp = rd.randrange(sys.maxsize)
+    cutdown_ratio = 1
+    if cutdown_ratio != 1:
 
-    torch.distributed.barrier()
+        train_idxs = src.utils.list.cutdown_list(train_idxs, cutdown_ratio)
+        val_idxs = src.utils.list.cutdown_list(val_idxs, cutdown_ratio)
+        
+        logger.print("  [Rank {:d}] Reducing dataset to {:5.2f}%".format(
+            rank,
+            cutdown_ratio * 100
+        ))
 
-    state = np.random.get_state()
-    np.random.seed = dataset_random_seed_mp
-    np.random.shuffle(ctsrbm_train_idxs)
-    np.random.set_state(state)
+    ctsrbm_train_dataset = Subset(ctsrbm_dataset, train_idxs)
+    ctsrbm_val_dataset = Subset(ctsrbm_dataset, val_idxs)
 
-    # Validation dataloader initialization
+    # Data loader initialization
 
     batch_size = exp_params["settings"]["stage_1"]["data_loading"]["batch_size"]
     num_workers = exp_params["settings"]["stage_1"]["data_loading"]["num_workers"]
 
-    ctsrbm_val_dataset = Subset(ctsrbm_dataset, ctsrbm_val_idxs)
-
-    ctsrbm_val_loader = DataLoader(
+    train_loader = DataLoader(
+        ctsrbm_train_dataset,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        pin_memory=True,
+        shuffle=False,
+        sampler=DistributedSampler(ctsrbm_train_dataset)
+    )
+    
+    val_loader = DataLoader(
         ctsrbm_val_dataset,
         batch_size=batch_size,
         num_workers=num_workers,
@@ -540,77 +735,66 @@ def execute_stage_1_DDP(
         shuffle=False,
         sampler=DistributedSampler(ctsrbm_val_dataset)
     )
+    
+    logger.print("  [Rank {:d}] Data Prepared".format(rank))
 
-    # Load or initialize components
+    # Settings & components
 
-    backbone = create_backbone(exp_params["settings"]["backbone"])
-    backbone = backbone.to(device)
+    logger.print("  [Rank {:d}] Components Loading...".format(rank))
 
-    ret_head = create_ret_head(backbone)
-    ret_head = ret_head.to(device)
+    ## Basic settings
 
-    optimizer_params = ret_head.parameters()
-
-    optimizer = create_optimizer(
-        optimizer_params,
-        exp_params["settings"]["stage_1"]["optimizer"],
-        len(exp_params["settings"]["device_idxs"])
-        )
-
-    scheduler = create_scheduler(
-        optimizer,
-        exp_params["settings"]["stage_1"]["scheduler"]
-        )
-
-    early_stopper = create_early_stopper(exp_params["settings"]["stage_1"]["early_stopper"])
-    best_tracker = create_best_tracker()
-
-    grad_scaler = None
-
-    if exp_params["settings"]["stage_1"]["autocast"]["enabled"]:
-        grad_scaler = torch.cuda.amp.GradScaler()
-
+    max_epochs = exp_params["settings"]["stage_1"]["max_epochs"]
     num_epochs = exp_data["results"]["stage_1"]["num_epochs"]
+    
+    ## Load or initialize components
 
-    if num_epochs != 0:
+    if num_epochs == 0:
+
+        backbone, ret_head, optimizer, scheduler, early_stopper, best_tracker =\
+        initialize_stage_1_components(
+            exp_params,
+            device
+        )
+
+    else:
 
         last_stage_1_experiment_checkpoint_filename = os.path.join(
-            experiment_dirname, "train_ret_DDP__last_stage_1_ckp.pth", device
+            experiment_dirname, "last_stage_1_ckp.pth"
         )
 
-        experiment_checkpoint = torch.load(last_stage_1_experiment_checkpoint_filename)
+        backbone, ret_head, optimizer, scheduler, early_stopper, best_tracker =\
+        load_stage_1_experiment_checkpoint(
+            last_stage_1_experiment_checkpoint_filename,
+            exp_params,
+            device
+        )
 
-        backbone.load_state_dict(experiment_checkpoint["backbone_state_dict"])
-        ret_head.load_state_dict(experiment_checkpoint["ret_head_state_dict"])
-        optimizer.load_state_dict(experiment_checkpoint["optimizer_state_dict"])
-        scheduler.load_state_dict(experiment_checkpoint["scheduler_state_dict"])
-        early_stopper.load_state_dict(experiment_checkpoint["early_stopper_state_dict"])
-        best_tracker.load_state_dict(experiment_checkpoint["best_tracker_state_dict"])
-        if exp_params["settings"]["stage_1"]["autocast"]["enabled"]:
-            grad_scaler.load_state_dict(experiment_checkpoint["grad_scaler_state_dict"])
+    ## Build models
 
-    ret_model = models.BackboneAndHead(backbone, ret_head).to(device)
+    ret_model = torch.nn.Sequential(backbone, ret_head).to(device)
     ret_model = DDP(ret_model, device_ids=[rank], find_unused_parameters=True, broadcast_buffers=False)
 
-    # General settings
+    ## General settings
 
-    with_tqdm = not command_args.no_tqdm and not command_args.terminal_silent
+    with_tqdm = not command_args.notqdm and not command_args.silent
 
-    grad_acc_iters = utils.dict.chain_get(
+    max_acc_iter = src.utils.dict.chain_get(
         exp_params,
-        "settings", "stage_1", "data_loading", "grad_acc_iters",
+        "settings", "stage_1", "max_acc_iter",
         default=1
     )
+
+    scaler = torch.cuda.amp.GradScaler()
 
     for param in backbone.parameters():
         param.requires_grad = False      
 
+    logger.print("  [Rank {:d}] Components Loaded".format(rank))
+
     # Training loop
 
     logger.print("  [Rank {:d}] Training Loop Begin".format(rank))
-
-    num_epochs = exp_data["results"]["stage_1"]["num_epochs"]
-    max_epochs = exp_params["settings"]["stage_1"]["max_epochs"]    
 
     if rank == 0:    
         finished_mp.value = exp_data["results"]["stage_1"]["finished"]
@@ -628,58 +812,29 @@ def execute_stage_1_DDP(
             num_epochs
         ))
 
-        ## Train dataloader initialization
-
-        cutdown_ctsrbm_train_idxs = ctsrbm_train_idxs
-
-        if exp_params["settings"]["stage_1"]["data_gradual_inc"]["enabled"]:
-
-            cutdown_ratio = compute_gradual_inc_cutdown_ratio(
-                num_epochs,
-                exp_params["settings"]["stage_1"]["data_gradual_inc"]["num_epochs"],
-                exp_params["settings"]["stage_1"]["data_gradual_inc"]["init_perc"] / 100
-                )
-
-            if cutdown_ratio != 1:
-
-                cutdown_ctsrbm_train_idxs = utils.list.cutdown_list(cutdown_ctsrbm_train_idxs, cutdown_ratio)
-                
-                logger.print("  [Rank {:d}] Reduced size of train split to {:.2f}%".format(rank, cutdown_ratio * 100))
-
-        ctsrbm_train_dataset = Subset(ctsrbm_dataset, cutdown_ctsrbm_train_idxs)
-
-        ctsrbm_train_loader = DataLoader(
-            ctsrbm_train_dataset,
-            batch_size=batch_size,
-            num_workers=num_workers,
-            pin_memory=True,
-            shuffle=False,
-            sampler=DistributedSampler(ctsrbm_train_dataset)
-        )
-
         ## Training
 
         start_time = time()
 
         train_loss = train_epoch(
-            ctsrbm_train_loader,
+            train_loader,
             ret_model,
             optimizer,
-            grad_scaler,
+            scaler,
             device,
             logger,
-            grad_acc_iters=grad_acc_iters,
+            max_acc_iter=max_acc_iter,
             with_tqdm=with_tqdm
         )
 
         end_time = time()
 
         train_epoch_time = end_time - start_time
-        train_mean_loss = train_loss / len(ctsrbm_train_loader)
+        train_mean_loss = train_loss / len(ctsrbm_train_dataset)
 
         logger.print("  [Rank {:d}] Train epoch time: {:s}".format(
             rank,
-            utils.time.sprint_fancy_time_diff(train_epoch_time)
+            src.utils.time.sprint_fancy_time_diff(train_epoch_time)
         ))
 
         logger.print("  [Rank {:d}] Train mean loss:  {:.2e}".format(
@@ -692,7 +847,7 @@ def execute_stage_1_DDP(
         start_time = time()
 
         val_loss = eval_epoch(
-            ctsrbm_val_loader,
+            val_loader,
             ret_model,
             device,
             logger,
@@ -702,11 +857,11 @@ def execute_stage_1_DDP(
         end_time = time()
 
         val_epoch_time = end_time - start_time
-        val_mean_loss = val_loss / len(ctsrbm_val_loader)
+        val_mean_loss = val_loss / len(ctsrbm_val_dataset)
 
         logger.print("  [Rank {:d}] Val epoch time:   {:s}".format(
             rank,
-            utils.time.sprint_fancy_time_diff(train_epoch_time)
+            src.utils.time.sprint_fancy_time_diff(train_epoch_time)
         ))
 
         logger.print("  [Rank {:d}] Val mean loss:    {:.2e}".format(
@@ -714,14 +869,11 @@ def execute_stage_1_DDP(
             train_mean_loss
         ))
 
-        if rank == 0:
-            exp_data["settings"]["stage_1"]["learning_rate_list"].append(scheduler.get_last_lr()[0])
-
         scheduler.step()
 
         if rank == 0:
             logger.print("  [Rank {:d}] Current memory usage:".format(rank))
-            logger.print(utils.mem.sprint_memory_usage(exp_params["settings"]["device_idxs"], num_spaces=4))
+            logger.print(src.utils.nvgpu.sprint_memory_usage(exp_params["settings"]["device_idxs"], num_spaces=4))
 
         ## Track results
 
@@ -739,6 +891,8 @@ def execute_stage_1_DDP(
 
             exp_data["results"]["stage_1"]["train_mean_loss_list"].append(list(train_mean_loss_list_mp))
             exp_data["results"]["stage_1"]["val_mean_loss_list"].append(list(val_mean_loss_list_mp))
+
+            exp_data["settings"]["stage_1"]["learning_rate_list"].append(scheduler.get_last_lr()[0])
         
         ## Training conditions and checkpoints
 
@@ -756,14 +910,14 @@ def execute_stage_1_DDP(
 
             ## Checkpoint saving
 
-            with utils.sig.DelayedInterrupt():
+            with src.utils.signal.DelayedInterrupt():
 
                 ## Save best component checkpoint
 
                 if best_tracker.is_best(sum(train_mean_loss_list_mp)):
 
                     best_stage_1_experiment_checkpoint_filename = os.path.join(
-                        experiment_dirname, "train_ret_DDP__best_stage_1_ckp.pth"
+                        experiment_dirname, "best_stage_1_ckp.pth"
                     )
 
                     logger.print("  [Rank {:d}] Saving currently best model to \"{:s}\"".format(
@@ -778,8 +932,7 @@ def execute_stage_1_DDP(
                         optimizer,
                         scheduler,
                         early_stopper,
-                        best_tracker,
-                        grad_scaler
+                        best_tracker
                         )
 
                     logger.print("  [Rank {:d}] Saved currently best model to \"{:s}\"".format(
@@ -793,7 +946,7 @@ def execute_stage_1_DDP(
                 exp_data["results"]["stage_1"]["finished"] = finished_mp.value
 
                 exp_data_filename = os.path.join(
-                    experiment_dirname, "train_ret_DDP__data.json"
+                    experiment_dirname, "exp_data.json"
                 )
 
                 logger.print("  [Rank {:d}] Saving experiment data to \"{:s}\"".format(
@@ -801,7 +954,7 @@ def execute_stage_1_DDP(
                     exp_data_filename
                 ))
 
-                save_json_dict(
+                save_exp_data(
                     exp_data_filename, exp_data
                 )
 
@@ -813,7 +966,7 @@ def execute_stage_1_DDP(
                 ## Save last component checkpoint
                 
                 last_stage_1_experiment_checkpoint_filename = os.path.join(
-                    experiment_dirname, "train_ret_DDP__last_stage_1_ckp.pth"
+                    experiment_dirname, "last_stage_1_ckp.pth"
                 )
 
                 logger.print("  [Rank {:d}] Saving last epoch model to \"{:s}\"".format(
@@ -828,8 +981,7 @@ def execute_stage_1_DDP(
                     optimizer,
                     scheduler,
                     early_stopper,
-                    best_tracker,
-                    grad_scaler
+                    best_tracker
                 )
 
                 logger.print("  [Rank {:d}] Saved last epoch model to \"{:s}\"".format(
@@ -856,7 +1008,6 @@ def execute_stage_2_DDP(
     val_epoch_time_list_mp,
     train_mean_loss_list_mp,
     val_mean_loss_list_mp,
-    dataset_random_seed_mp,
     finished_mp
 ):
 
@@ -865,13 +1016,13 @@ def execute_stage_2_DDP(
     experiment_name = exp_params["experiment_name"]
     experiment_dirname = os.path.join(pathlib.Path.home(), "data", "fashion_retrieval", experiment_name)
 
-    log_filename = "train_ret_DDP__logs.txt"
+    log_filename = "exp_logs.txt"
     log_full_filename = os.path.join(experiment_dirname, log_filename)
 
     logger_streams = [log_full_filename]
-    if not command_args.terminal_silent: logger_streams.append(sys.stdout)
+    if not command_args.silent: logger_streams.append(sys.stdout)
 
-    logger = utils.log.Logger(logger_streams)
+    logger = src.utils.log.Logger(logger_streams)
 
     logger.print("  [Rank {:d}] Logger prepared".format(rank))
 
@@ -880,42 +1031,69 @@ def execute_stage_2_DDP(
     logger.print("  [Rank {:d}] DDP Setup Preparing...".format(rank))
 
     os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "{:d}".format(command_args.master_port)
+    os.environ["MASTER_PORT"] = "12355"
 
     init_process_group(backend="nccl", rank=rank, world_size=world_size)
 
     device = torch.device(rank)
     
+    logger.print("  [Rank {:d}] DDP Setup Ready".format(rank))
+
     # Dataset initialization
 
-    backbone_image_transform = get_backbone_image_transform(exp_params["settings"]["backbone"]["class"])
+    logger.print("  [Rank {:d}] Data Preparing...".format(rank))
+
+    backbone_class = exp_params["settings"]["backbone"]["class"]
+
+    if backbone_class == "ResNet50Backbone":
+        backbone_image_transform = torchvision.models.ResNet50_Weights.DEFAULT.transforms()
+    if backbone_class == "EfficientNetB3Backbone":
+        backbone_image_transform = torchvision.models.EfficientNet_B3_Weights.DEFAULT.transforms()
+    if backbone_class == "EfficientNetB4Backbone":
+        backbone_image_transform = torchvision.models.EfficientNet_B4_Weights.DEFAULT.transforms()
+    if backbone_class == "EfficientNetB5Backbone":
+        backbone_image_transform = torchvision.models.EfficientNet_B5_Weights.DEFAULT.transforms()
+    if backbone_class == "ConvNeXtTinyBackbone":
+        backbone_image_transform = torchvision.models.ConvNeXt_Tiny_Weights.DEFAULT.transforms()
+
     backbone_image_transform.antialias = True
 
     ctsrbm_dataset_dir = os.path.join(pathlib.Path.home(), "data", "DeepFashion", "Consumer-to-shop Clothes Retrieval Benchmark")
 
-    ctsrbm_dataset = deep_fashion_ctsrbm.ConsToShopClothRetrBmkDataset(ctsrbm_dataset_dir, img_transform=backbone_image_transform, neg_img_filename_list_id="test")
+    ctsrbm_dataset = deep_fashion.ConsToShopClothRetrBM_NEW(ctsrbm_dataset_dir, img_transform=backbone_image_transform, neg_img_filename_list_id="test")
 
-    ctsrbm_train_idxs = ctsrbm_dataset.get_subset_indices(split="train")
-    ctsrbm_val_idxs = ctsrbm_dataset.get_subset_indices(split="val")
+    train_idxs = ctsrbm_dataset.get_split_mask_idxs("train")
+    val_idxs = ctsrbm_dataset.get_split_mask_idxs("val")
 
-    if rank == 0:
-        dataset_random_seed_mp = rd.randrange(sys.maxsize)
+    cutdown_ratio = 1
+    if cutdown_ratio != 1:
 
-    torch.distributed.barrier()
+        train_idxs = src.utils.list.cutdown_list(train_idxs, cutdown_ratio)
+        val_idxs = src.utils.list.cutdown_list(val_idxs, cutdown_ratio)
 
-    state = np.random.get_state()
-    np.random.seed = dataset_random_seed_mp
-    np.random.shuffle(ctsrbm_train_idxs)
-    np.random.set_state(state)
+        logger.print("  [Rank {:d}] Reducing dataset to {:5.2f}%".format(
+            rank,
+            cutdown_ratio * 100
+        ))
+    
+    ctsrbm_train_dataset = Subset(ctsrbm_dataset, train_idxs)
+    ctsrbm_val_dataset = Subset(ctsrbm_dataset, val_idxs)
 
-    # Validation dataloader initialization
+    # Data loader initialization
 
     batch_size = exp_params["settings"]["stage_2"]["data_loading"]["batch_size"]
     num_workers = exp_params["settings"]["stage_2"]["data_loading"]["num_workers"]
 
-    ctsrbm_val_dataset = Subset(ctsrbm_dataset, ctsrbm_val_idxs)
-
-    ctsrbm_val_loader = DataLoader(
+    train_loader = DataLoader(
+        ctsrbm_train_dataset,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        pin_memory=True,
+        shuffle=False,
+        sampler=DistributedSampler(ctsrbm_train_dataset)
+    )
+    
+    val_loader = DataLoader(
         ctsrbm_val_dataset,
         batch_size=batch_size,
         num_workers=num_workers,
@@ -923,88 +1101,71 @@ def execute_stage_2_DDP(
         shuffle=False,
         sampler=DistributedSampler(ctsrbm_val_dataset)
     )
+    
+    logger.print("  [Rank {:d}] Data Prepared".format(rank))
 
-    # Load or initialize components
+    # Settings & components
+    
+    logger.print("  [Rank {:d}] Components Loading...".format(rank))
 
-    backbone = create_backbone(exp_params["settings"]["backbone"])
-    backbone = backbone.to(device)
+    ## Basic settings
 
-    ret_head = create_ret_head(backbone)
-    ret_head = ret_head.to(device)
-
-    optimizer_params = chain(
-        backbone.parameters(),
-        ret_head.parameters()
-    )
-
-    optimizer = create_optimizer(
-        optimizer_params,
-        exp_params["settings"]["stage_2"]["optimizer"],
-        len(exp_params["settings"]["device_idxs"])
-        )
-
-    scheduler = create_scheduler(
-        optimizer,
-        exp_params["settings"]["stage_2"]["scheduler"]
-        )
-
-    early_stopper = create_early_stopper(exp_params["settings"]["stage_2"]["early_stopper"])
-    best_tracker = create_best_tracker()
-
-    grad_scaler = None
-
-    if exp_params["settings"]["stage_2"]["autocast"]["enabled"]:
-        grad_scaler = torch.cuda.amp.GradScaler()
-
+    max_epochs = exp_params["settings"]["stage_2"]["max_epochs"]
     num_epochs = exp_data["results"]["stage_2"]["num_epochs"]
+    
+    ## Load or initialize components
 
     if num_epochs == 0:
 
         best_stage_1_experiment_checkpoint_filename = os.path.join(
-            experiment_dirname, "train_ret_DDP__best_stage_1_ckp.pth"
+            experiment_dirname, "best_stage_1_ckp.pth"
         )
 
-        experiment_checkpoint = torch.load(best_stage_1_experiment_checkpoint_filename)
-
-        backbone.load_state_dict(experiment_checkpoint["backbone_state_dict"])
-        ret_head.load_state_dict(experiment_checkpoint["ret_head_state_dict"])
+        backbone, ret_head, optimizer, scheduler, early_stopper, best_tracker =\
+        initialize_stage_2_components(
+            best_stage_1_experiment_checkpoint_filename,
+            exp_params,
+            device
+        )
 
     else:
 
         last_stage_2_experiment_checkpoint_filename = os.path.join(
-            experiment_dirname, "train_ret_DDP__last_stage_2_ckp.pth"
+            experiment_dirname, "last_stage_2_ckp.pth"
         )
 
-        experiment_checkpoint = torch.load(last_stage_2_experiment_checkpoint_filename)
+        backbone, ret_head, optimizer, scheduler, early_stopper, best_tracker =\
+        load_stage_2_experiment_checkpoint(
+            last_stage_2_experiment_checkpoint_filename,
+            exp_params,
+            device
+        )
 
-        backbone.load_state_dict(experiment_checkpoint["backbone_state_dict"])
-        ret_head.load_state_dict(experiment_checkpoint["ret_head_state_dict"])
-        optimizer.load_state_dict(experiment_checkpoint["optimizer_state_dict"])
-        scheduler.load_state_dict(experiment_checkpoint["scheduler_state_dict"])
-        early_stopper.load_state_dict(experiment_checkpoint["early_stopper_state_dict"])
-        best_tracker.load_state_dict(experiment_checkpoint["best_tracker_state_dict"])
-        if exp_params["settings"]["stage_1"]["autocast"]["enabled"]:
-            grad_scaler.load_state_dict(experiment_checkpoint["grad_scaler_state_dict"])
+    ## Build models
 
-    ret_model = models.BackboneAndHead(backbone, ret_head).to(device)
+    ret_model = torch.nn.Sequential(backbone, ret_head).to(device)
     ret_model = DDP(ret_model, device_ids=[rank], broadcast_buffers=False)
 
-    # General settings
+    ## General settings
 
-    with_tqdm = not command_args.no_tqdm and not command_args.terminal_silent
+    with_tqdm = not command_args.notqdm and not command_args.silent
 
-    grad_acc_iters = utils.dict.chain_get(
+    max_acc_iter = src.utils.dict.chain_get(
         exp_params,
-        "settings", "stage_2", "data_loading", "grad_acc_iters",
+        "settings", "stage_2", "max_acc_iter",
         default=1
-    )  
+    )
+
+    scaler = torch.cuda.amp.GradScaler()
+
+    for param in backbone.parameters():
+        param.requires_grad = True      
+
+    logger.print("  [Rank {:d}] Components Loaded".format(rank))
 
     # Training loop
 
     logger.print("  [Rank {:d}] Training Loop Begin".format(rank))
-
-    num_epochs = exp_data["results"]["stage_2"]["num_epochs"]
-    max_epochs = exp_params["settings"]["stage_2"]["max_epochs"]   
 
     if rank == 0:    
         finished_mp.value = exp_data["results"]["stage_2"]["finished"]
@@ -1022,58 +1183,29 @@ def execute_stage_2_DDP(
             num_epochs
         ))
 
-        ## Train dataloader initialization
-
-        cutdown_ctsrbm_train_idxs = ctsrbm_train_idxs
-
-        if exp_params["settings"]["stage_2"]["data_gradual_inc"]["enabled"]:
-
-            cutdown_ratio = compute_gradual_inc_cutdown_ratio(
-                num_epochs,
-                exp_params["settings"]["stage_2"]["data_gradual_inc"]["num_epochs"],
-                exp_params["settings"]["stage_2"]["data_gradual_inc"]["init_perc"] / 100
-                )
-
-            if cutdown_ratio != 1:
-
-                cutdown_ctsrbm_train_idxs = utils.list.cutdown_list(cutdown_ctsrbm_train_idxs, cutdown_ratio)
-                
-                logger.print("  [Rank {:d}] Reduced size of train split to {:.2f}%".format(rank, cutdown_ratio * 100))
-
-        ctsrbm_train_dataset = Subset(ctsrbm_dataset, cutdown_ctsrbm_train_idxs)
-
-        ctsrbm_train_loader = DataLoader(
-            ctsrbm_train_dataset,
-            batch_size=batch_size,
-            num_workers=num_workers,
-            pin_memory=True,
-            shuffle=False,
-            sampler=DistributedSampler(ctsrbm_train_dataset)
-        )
-
         ## Training
 
         start_time = time()
 
         train_loss = train_epoch(
-            ctsrbm_train_loader,
+            train_loader,
             ret_model,
             optimizer,
-            grad_scaler,
+            scaler,
             device,
             logger,
-            grad_acc_iters=grad_acc_iters,
+            max_acc_iter=max_acc_iter,
             with_tqdm=with_tqdm
         )
 
         end_time = time()
 
         train_epoch_time = end_time - start_time
-        train_mean_loss = train_loss / len(ctsrbm_train_loader)
+        train_mean_loss = train_loss / len(ctsrbm_train_dataset)
 
         logger.print("  [Rank {:d}] Train epoch time: {:s}".format(
             rank,
-            utils.time.sprint_fancy_time_diff(train_epoch_time)
+            src.utils.time.sprint_fancy_time_diff(train_epoch_time)
         ))
 
         logger.print("  [Rank {:d}] Train mean loss:  {:.2e}".format(
@@ -1086,7 +1218,7 @@ def execute_stage_2_DDP(
         start_time = time()
 
         val_loss = eval_epoch(
-            ctsrbm_val_loader,
+            val_loader,
             ret_model,
             device,
             logger,
@@ -1096,11 +1228,11 @@ def execute_stage_2_DDP(
         end_time = time()
 
         val_epoch_time = end_time - start_time
-        val_mean_loss = val_loss / len(ctsrbm_val_loader)
+        val_mean_loss = val_loss / len(ctsrbm_val_dataset)
 
         logger.print("  [Rank {:d}] Val epoch time:   {:s}".format(
             rank,
-            utils.time.sprint_fancy_time_diff(train_epoch_time)
+            src.utils.time.sprint_fancy_time_diff(train_epoch_time)
         ))
 
         logger.print("  [Rank {:d}] Val mean loss:    {:.2e}".format(
@@ -1108,14 +1240,11 @@ def execute_stage_2_DDP(
             train_mean_loss
         ))
 
-        if rank == 0:
-            exp_data["settings"]["stage_2"]["learning_rate_list"].append(scheduler.get_last_lr()[0])
-
         scheduler.step()
 
         if rank == 0:
             logger.print("  [Rank {:d}] Current memory usage:".format(rank))
-            logger.print(utils.mem.sprint_memory_usage(exp_params["settings"]["device_idxs"], num_spaces=4))
+            logger.print(src.utils.nvgpu.sprint_memory_usage(exp_params["settings"]["device_idxs"], num_spaces=4))
 
         ## Track results
 
@@ -1133,6 +1262,8 @@ def execute_stage_2_DDP(
 
             exp_data["results"]["stage_2"]["train_mean_loss_list"].append(list(train_mean_loss_list_mp))
             exp_data["results"]["stage_2"]["val_mean_loss_list"].append(list(val_mean_loss_list_mp))
+
+            exp_data["settings"]["stage_2"]["learning_rate_list"].append(scheduler.get_last_lr()[0])
         
         ## Training conditions and checkpoints
 
@@ -1150,14 +1281,14 @@ def execute_stage_2_DDP(
 
             ## Checkpoint saving
 
-            with utils.sig.DelayedInterrupt():
+            with src.utils.signal.DelayedInterrupt():
 
                 ## Save best component checkpoint
 
                 if best_tracker.is_best(sum(train_mean_loss_list_mp)):
 
                     best_stage_2_experiment_checkpoint_filename = os.path.join(
-                        experiment_dirname, "train_ret_DDP__best_stage_2_ckp.pth"
+                        experiment_dirname, "best_stage_2_ckp.pth"
                     )
 
                     logger.print("  [Rank {:d}] Saving currently best model to \"{:s}\"".format(
@@ -1172,8 +1303,7 @@ def execute_stage_2_DDP(
                         optimizer,
                         scheduler,
                         early_stopper,
-                        best_tracker,
-                        grad_scaler
+                        best_tracker
                         )
 
                     logger.print("  [Rank {:d}] Saved currently best model to \"{:s}\"".format(
@@ -1187,7 +1317,7 @@ def execute_stage_2_DDP(
                 exp_data["results"]["stage_2"]["finished"] = finished_mp.value
 
                 exp_data_filename = os.path.join(
-                    experiment_dirname, "train_ret_DDP__data.json"
+                    experiment_dirname, "exp_data.json"
                 )
 
                 logger.print("  [Rank {:d}] Saving experiment data to \"{:s}\"".format(
@@ -1195,7 +1325,7 @@ def execute_stage_2_DDP(
                     exp_data_filename
                 ))
 
-                save_json_dict(
+                save_exp_data(
                     exp_data_filename, exp_data
                 )
 
@@ -1207,7 +1337,7 @@ def execute_stage_2_DDP(
                 ## Save last component checkpoint
                 
                 last_stage_2_experiment_checkpoint_filename = os.path.join(
-                    experiment_dirname, "train_ret_DDP__last_stage_2_ckp.pth"
+                    experiment_dirname, "last_stage_2_ckp.pth"
                 )
 
                 logger.print("  [Rank {:d}] Saving last epoch model to \"{:s}\"".format(
@@ -1222,8 +1352,7 @@ def execute_stage_2_DDP(
                     optimizer,
                     scheduler,
                     early_stopper,
-                    best_tracker,
-                    grad_scaler
+                    best_tracker
                 )
 
                 logger.print("  [Rank {:d}] Saved last epoch model to \"{:s}\"".format(
@@ -1256,42 +1385,78 @@ def execute_test_DDP(
     experiment_name = exp_params["experiment_name"]
     experiment_dirname = os.path.join(pathlib.Path.home(), "data", "fashion_retrieval", experiment_name)
 
-    log_filename = "train_ret_DDP__logs.txt"
+    log_filename = "exp_logs.txt"
     log_full_filename = os.path.join(experiment_dirname, log_filename)
 
     logger_streams = [log_full_filename]
-    if not command_args.terminal_silent: logger_streams.append(sys.stdout)
+    if not command_args.silent: logger_streams.append(sys.stdout)
 
-    logger = utils.log.Logger(logger_streams)
+    logger = src.utils.log.Logger(logger_streams)
+
+    logger.print("  [Rank {:d}] Logger prepared".format(rank))
 
     # PyTorch DDP stuff
 
+    logger.print("  [Rank {:d}] DDP Setup Preparing...".format(rank))
+
     os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "{:d}".format(command_args.master_port)
+    os.environ["MASTER_PORT"] = "12355"
 
     init_process_group(backend="nccl", rank=rank, world_size=world_size)
 
     device = torch.device(rank)
     
+    logger.print("  [Rank {:d}] DDP Setup Ready".format(rank))
+
     # Dataset initialization
 
-    backbone_image_transform = get_backbone_image_transform(exp_params["settings"]["backbone"]["class"])
+    logger.print("  [Rank {:d}] Data Preparing...".format(rank))
+    
+    backbone_class = exp_params["settings"]["backbone"]["class"]
+
+    if backbone_class == "ResNet50Backbone":
+        backbone_image_transform = torchvision.models.ResNet50_Weights.DEFAULT.transforms()
+    if backbone_class == "EfficientNetB3Backbone":
+        backbone_image_transform = torchvision.models.EfficientNet_B3_Weights.DEFAULT.transforms()
+    if backbone_class == "EfficientNetB4Backbone":
+        backbone_image_transform = torchvision.models.EfficientNet_B4_Weights.DEFAULT.transforms()
+    if backbone_class == "EfficientNetB5Backbone":
+        backbone_image_transform = torchvision.models.EfficientNet_B5_Weights.DEFAULT.transforms()
+    if backbone_class == "ConvNeXtTinyBackbone":
+        backbone_image_transform = torchvision.models.ConvNeXt_Tiny_Weights.DEFAULT.transforms()
+
     backbone_image_transform.antialias = True
 
     ctsrbm_dataset_dir = os.path.join(pathlib.Path.home(), "data", "DeepFashion", "Consumer-to-shop Clothes Retrieval Benchmark")
 
-    ctsrbm_dataset = deep_fashion_ctsrbm.ConsToShopClothRetrBmkDataset(ctsrbm_dataset_dir, img_transform=backbone_image_transform, neg_img_filename_list_id="test")
+    ctsrbm_dataset = deep_fashion.ConsToShopClothRetrBM_NEW(ctsrbm_dataset_dir, img_transform=backbone_image_transform, neg_img_filename_list_id="test")
 
-    ctsrbm_test_idxs = ctsrbm_dataset.get_subset_indices(split="test")
+    test_idxs = ctsrbm_dataset.get_split_mask_idxs("test")
+
+    cutdown_ratio = 1
+    if cutdown_ratio != 1:
+
+        test_idxs = src.utils.list.cutdown_list(test_idxs, cutdown_ratio)
+
+        logger.print("  [Rank {:d}] Reducing dataset to {:5.2f}%".format(
+            rank,
+            cutdown_ratio * 100
+        ))
+
+    """
+    if len(exp_params["settings"]["device_idxs"]) > 1:
+
+        test_idxs = test_idxs[:(len(test_idxs) // batch_size) * batch_size]
+    """
     
-    # Dataloader initialization
+    ctsrbm_test_dataset = Subset(ctsrbm_dataset, test_idxs)
+
+    # Data loader initialization
 
     batch_size = exp_params["settings"]["test"]["data_loading"]["batch_size"]
     num_workers = exp_params["settings"]["test"]["data_loading"]["num_workers"]
 
-    ctsrbm_test_dataset = Subset(ctsrbm_dataset, ctsrbm_test_idxs)
-
-    ctsrbm_test_loader = DataLoader(
+    test_loader = DataLoader(
         ctsrbm_test_dataset,
         batch_size=batch_size,
         num_workers=num_workers,
@@ -1299,30 +1464,36 @@ def execute_test_DDP(
         shuffle=False,
         sampler=DistributedSampler(ctsrbm_test_dataset)
     )
+    
+    logger.print("  [Rank {:d}] Data Prepared".format(rank))
 
-    # Load or initialize components
+    # Settings & components
+    
+    logger.print("  [Rank {:d}] Components Loading...".format(rank))
 
-    backbone = create_backbone(exp_params["settings"]["backbone"])
-    backbone = backbone.to(device)
+    ## Load or initialize components
 
-    ret_head = create_ret_head(backbone)
-    ret_head = ret_head.to(device)
-
-    last_stage_2_experiment_checkpoint_filename = os.path.join(
-        experiment_dirname, "train_ret_DDP__last_stage_2_ckp.pth"
+    best_stage_2_experiment_checkpoint_filename = os.path.join(
+        experiment_dirname, "best_stage_2_ckp.pth"
     )
 
-    experiment_checkpoint = torch.load(last_stage_2_experiment_checkpoint_filename)
-
-    backbone.load_state_dict(experiment_checkpoint["backbone_state_dict"])
-    ret_head.load_state_dict(experiment_checkpoint["ret_head_state_dict"])
+    backbone, ret_head, optimizer, scheduler, early_stopper, best_tracker =\
+    load_stage_2_experiment_checkpoint(
+        best_stage_2_experiment_checkpoint_filename,
+        exp_params,
+        device
+    )
         
-    ret_model = models.BackboneAndHead(backbone, ret_head).to(device)
+    ## Build models
+
+    ret_model = torch.nn.Sequential(backbone, ret_head).to(device)
     ret_model = DDP(ret_model, device_ids=[rank], broadcast_buffers=False)
 
     ## General settings
 
-    with_tqdm = not command_args.no_tqdm and not command_args.terminal_silent
+    with_tqdm = not command_args.notqdm and not command_args.silent
+
+    logger.print("  [Rank {:d}] Components Loaded".format(rank))
 
     # Testing
 
@@ -1340,7 +1511,7 @@ def execute_test_DDP(
         start_time = time()
 
         test_loss = eval_epoch(
-            ctsrbm_test_loader,
+            test_loader,
             ret_model,
             device,
             logger,
@@ -1354,7 +1525,7 @@ def execute_test_DDP(
 
         logger.print("  [Rank {:d}] Test epoch time:  {:s}".format(
             rank,
-            utils.time.sprint_fancy_time_diff(test_epoch_time)
+            src.utils.time.sprint_fancy_time_diff(test_epoch_time)
         ))
 
         logger.print("  [Rank {:d}] Test mean loss:   {:.2e}".format(
@@ -1364,7 +1535,7 @@ def execute_test_DDP(
 
         if rank == 0:
             logger.print("  [Rank {:d}] Current memory usage:".format(rank))
-            logger.print(utils.mem.sprint_memory_usage(exp_params["settings"]["device_idxs"], num_spaces=4))
+            logger.print(src.utils.nvgpu.sprint_memory_usage(exp_params["settings"]["device_idxs"], num_spaces=4))
         
         ## Track results
 
@@ -1387,14 +1558,14 @@ def execute_test_DDP(
 
             ## Checkpoint saving
 
-            with utils.sig.DelayedInterrupt():
+            with src.utils.signal.DelayedInterrupt():
 
                 ## Save experiment data
 
                 exp_data["results"]["test"]["finished"] = finished_mp.value
 
                 exp_data_filename = os.path.join(
-                    experiment_dirname, "train_ret_DDP__data.json"
+                    experiment_dirname, "exp_data.json"
                 )
 
                 logger.print("  [Rank {:d}] Saving experiment data to \"{:s}\"".format(
@@ -1402,7 +1573,7 @@ def execute_test_DDP(
                     exp_data_filename
                 ))
 
-                save_json_dict(
+                save_exp_data(
                     exp_data_filename, exp_data
                 )
 
@@ -1427,6 +1598,7 @@ def execute_test_DDP(
 
 if __name__ == "__main__":
 
+    torch.autograd.set_detect_anomaly(True)
 
     datetime_now_str = datetime.now().strftime("%d-%m-%Y--%H:%M:%S")
 
@@ -1437,18 +1609,14 @@ if __name__ == "__main__":
 
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("exp_params_filename", help="filename of the experiment params json file")
-    parser.add_argument("--master_port", type=int, default=12355, help="master port for multi-GPU communication")
-    parser.add_argument("--terminal_silent", help="no terminal prints will be made", action="store_true")
-    parser.add_argument("--no_tqdm", help="no tqdm bars will be shown", action="store_true")
-    parser.add_argument("--reset_experiment", help="experiment directory will be reset", action="store_true")
-    parser.add_argument("--autograd_anomaly", help="wether to use torch.autograd.set_detect_anomaly(True) for debugging", action="store_true")
+    parser.add_argument("exp_params_filename", help="filename of the experiment params json file inside the \"exp_params\" directory")
+    parser.add_argument("--silent", help="no terminal prints will be made", action="store_true")
+    parser.add_argument("--notqdm", help="no tqdm bars will be shown", action="store_true")
+    parser.add_argument("--reset", help="experiment directory will be reset", action="store_true")
     command_args = parser.parse_args()
 
-    exp_params_filename = os.path.join(pathlib.Path.home(), "fashion_retrieval", command_args.exp_params_filename)
+    exp_params_filename = os.path.join(pathlib.Path.home(), "fashion_retrieval", "params", command_args.exp_params_filename)
 
-    if command_args.autograd_anomaly:
-        torch.autograd.set_detect_anomaly(True)
 
     ####
     # EXPERIMENT PREREQUISITES
@@ -1466,7 +1634,7 @@ if __name__ == "__main__":
     experiment_name = exp_params["experiment_name"]
     experiment_dirname = os.path.join(pathlib.Path.home(), "data", "fashion_retrieval", experiment_name)
     
-    if os.path.exists(experiment_dirname) and command_args.reset_experiment:
+    if os.path.exists(experiment_dirname) and command_args.reset:
         shutil.rmtree(experiment_dirname)
 
     if not os.path.exists(experiment_dirname):
@@ -1481,16 +1649,14 @@ if __name__ == "__main__":
     experiment_name = exp_params["experiment_name"]
     experiment_dirname = os.path.join(pathlib.Path.home(), "data", "fashion_retrieval", experiment_name)
 
-    log_filename = "train_ret_DDP__logs.txt"
+    log_filename = "exp_logs.txt"
     log_full_filename = os.path.join(experiment_dirname, log_filename)
 
     logger_streams = [log_full_filename]
-    if not command_args.terminal_silent: logger_streams.append(sys.stdout)
+    if not command_args.silent: logger_streams.append(sys.stdout)
 
-    logger = utils.log.Logger(logger_streams)
+    logger = src.utils.log.Logger(logger_streams)
     
-    logger.print("Bash command:", " ".join(sys.argv))
-
 
     ####
     # PREPARE EXPERIMENT DATA
@@ -1498,13 +1664,12 @@ if __name__ == "__main__":
 
     
     exp_data_filename = os.path.join(
-        experiment_dirname, "train_ret_DDP__data.json"
+        experiment_dirname, "exp_data.json"
     )
 
     if not os.path.exists(exp_data_filename):
 
         exp_data = {}
-        exp_data["script_name"] = sys.argv[0]
         exp_data["experiment_name"] = experiment_name
         exp_data["settings"] = {}
         exp_data["results"] = {}
@@ -1513,28 +1678,28 @@ if __name__ == "__main__":
             "DeepFashion Consumer-to-shop Clothes Retrieval Benchmark"
         ]
 
-        exp_data["settings"]["backbone"] = exp_params["settings"]["backbone"]
+        exp_data["settings"]["backbone"] = {
+            "class": exp_params["settings"]["backbone"]["class"]
+        }
 
         exp_data["settings"]["heads"] = []
         exp_data["settings"]["heads"].append({
             "class": "RetHead"
         })
 
-        exp_data["settings"]["command_args"] = vars(command_args)
-
         exp_data_filename = os.path.join(
-            experiment_dirname, "train_ret_DDP__data.json"
+            experiment_dirname, "exp_data.json"
         )
         
-        save_json_dict(exp_data_filename, exp_data)
+        save_exp_data(exp_data_filename, exp_data)
 
-        logger.print("Starting run at {:s}".format(datetime_now_str))
+        logger.print("Starting experiment at {:s}".format(datetime_now_str))
 
     else:
 
-        logger.print("Resuming run at {:s}".format(datetime_now_str))
+        logger.print("Resuming experiment at {:s}".format(datetime_now_str))
     
-    exp_data = load_json_dict(exp_data_filename)
+    exp_data = load_exp_data(exp_data_filename)
 
 
     ####
@@ -1549,9 +1714,9 @@ if __name__ == "__main__":
 
     torch.cuda.empty_cache()
 
-    exp_data["settings"]["gpu_usage"] = utils.mem.list_gpu_data(device_idxs)
+
+    exp_data["settings"]["gpu_usage"] = src.utils.nvgpu.list_gpu_data(device_idxs)
     exp_data["settings"]["hostname"] = socket.gethostname()
-    exp_data["settings"]["master_port"] = command_args.master_port
 
 
     ####
@@ -1561,7 +1726,7 @@ if __name__ == "__main__":
 
     # Initialize experiment data
 
-    if utils.dict.chain_get(exp_data, "settings", "stage_1") is None:
+    if src.utils.dict.chain_get(exp_data, "settings", "stage_1") is None:
         exp_data = initialize_stage_1_exp_data(exp_data, exp_params)
 
     # Check if stage is finished
@@ -1577,7 +1742,6 @@ if __name__ == "__main__":
         val_epoch_time_list_mp = manager.Array("f", [0 for _ in range(world_size)])
         train_mean_loss_list_mp = manager.Array("f", [0 for _ in range(world_size)])
         val_mean_loss_list_mp = manager.Array("f", [0 for _ in range(world_size)])
-        dataset_random_seed_mp = manager.Value("f", 0)
         finished_mp = manager.Value("b", False)
 
         logger.print("Stage 1 - Multiprocessing start")
@@ -1593,7 +1757,6 @@ if __name__ == "__main__":
                 val_epoch_time_list_mp,
                 train_mean_loss_list_mp,
                 val_mean_loss_list_mp,
-                dataset_random_seed_mp,
                 finished_mp
             ],
             nprocs=world_size
@@ -1601,7 +1764,7 @@ if __name__ == "__main__":
 
     # Reload experiment data
 
-    exp_data = load_json_dict(exp_data_filename)
+    exp_data = load_exp_data(exp_data_filename)
 
 
     ####
@@ -1611,7 +1774,7 @@ if __name__ == "__main__":
 
     # Initialize experiment data
 
-    if utils.dict.chain_get(exp_data, "settings", "stage_2") is None:
+    if src.utils.dict.chain_get(exp_data, "settings", "stage_2") is None:
         exp_data = initialize_stage_2_exp_data(exp_data, exp_params)
 
     # Check if stage is finished
@@ -1627,7 +1790,6 @@ if __name__ == "__main__":
         val_epoch_time_list_mp = manager.Array("f", [0 for _ in range(world_size)])
         train_mean_loss_list_mp = manager.Array("f", [0 for _ in range(world_size)])
         val_mean_loss_list_mp = manager.Array("f", [0 for _ in range(world_size)])
-        dataset_random_seed_mp = manager.Value("f", 0)
         finished_mp = manager.Value("b", False)
 
         logger.print("Stage 2 - Multiprocessing start")
@@ -1643,7 +1805,6 @@ if __name__ == "__main__":
                 val_epoch_time_list_mp,
                 train_mean_loss_list_mp,
                 val_mean_loss_list_mp,
-                dataset_random_seed_mp,
                 finished_mp
             ],
             nprocs=world_size
@@ -1651,7 +1812,7 @@ if __name__ == "__main__":
 
     # Reload experiment data
 
-    exp_data = load_json_dict(exp_data_filename)
+    exp_data = load_exp_data(exp_data_filename)
 
 
     ####
@@ -1661,7 +1822,7 @@ if __name__ == "__main__":
 
     # Initialize experiment data
 
-    if utils.dict.chain_get(exp_data, "settings", "test") is None:
+    if src.utils.dict.chain_get(exp_data, "settings", "test") is None:
         exp_data = initialize_test_exp_data(exp_data, exp_params)
 
     # Check if stage is finished

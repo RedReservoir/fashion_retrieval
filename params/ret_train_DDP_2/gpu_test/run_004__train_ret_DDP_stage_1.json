@@ -1,0 +1,46 @@
+{
+    "experiment_name": "ret_train_DDP_2/gpu_test/run_004",
+    "settings": {
+        "device_idxs": [
+            3, 4
+        ],
+        "backbone": {
+            "class": "ResNet50Backbone",
+            "img_size": 256
+        },
+        "ret_head": {
+            "emb_size": 1024
+        },
+        "data_loading": {
+            "cutdown_ratio": 0.10
+        },
+        "stage_1": {
+            "max_epochs": 10,
+            "optimizer": {
+                "class": "SGD",
+                "lr": 0.1,
+                "momentum": 0.9
+            },
+            "scheduler": {
+                "class": "ExponentialLR",
+                "gamma": 0.95
+            },
+            "early_stopper": {
+                "patience": 5,
+                "min_delta": 1e-06
+            },
+            "data_loading": {
+                "train_random_seed": 42,
+                "batch_size": 8,
+                "num_workers": 4,
+                "grad_acc_iters": 3
+            },
+            "autocast": {
+                "enabled": false
+            },
+            "data_gradual_inc": {
+                "enabled": false
+            }
+        }
+    }
+}

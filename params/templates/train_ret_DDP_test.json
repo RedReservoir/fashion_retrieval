@@ -1,0 +1,26 @@
+{
+    "experiment_name": "ret_train_DDP_2/test",
+    "settings": {
+      "device_idxs": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "backbone": {
+        "class": "ResNet50Backbone"
+      },
+      "ret_head": {
+        "emb_size": 1024
+      },
+      "data_loading": {
+        "cutdown_ratio": 0.10
+      },
+      "test": {
+        "data_loading": {
+          "batch_size": 16,
+          "num_workers": 4
+        }
+      }
+    }
+  }

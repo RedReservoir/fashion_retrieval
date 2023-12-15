@@ -1,0 +1,620 @@
+FasterViT(
+  (patch_embed): PatchEmbed(
+    (proj): Identity()
+    (conv_down): Sequential(
+      (0): Conv2d(3, 64, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+      (1): BatchNorm2d(64, eps=0.0001, momentum=0.1, affine=True, track_running_stats=True)
+      (2): ReLU()
+      (3): Conv2d(64, 64, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+      (4): BatchNorm2d(64, eps=0.0001, momentum=0.1, affine=True, track_running_stats=True)
+      (5): ReLU()
+    )
+  )
+  (levels): ModuleList(
+    (0): FasterViTLayer(
+      (blocks): ModuleList(
+        (0): ConvBlock(
+          (conv1): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          (norm1): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+          (act1): GELU(approximate='none')
+          (conv2): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          (norm2): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+          (drop_path): Identity()
+        )
+        (1): ConvBlock(
+          (conv1): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          (norm1): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+          (act1): GELU(approximate='none')
+          (conv2): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          (norm2): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+          (drop_path): DropPath(drop_prob=0.013)
+        )
+      )
+      (downsample): Downsample(
+        (norm): LayerNorm2d((64,), eps=1e-06, elementwise_affine=True)
+        (reduction): Sequential(
+          (0): Conv2d(64, 128, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+        )
+      )
+    )
+    (1): FasterViTLayer(
+      (blocks): ModuleList(
+        (0): ConvBlock(
+          (conv1): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          (norm1): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+          (act1): GELU(approximate='none')
+          (conv2): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          (norm2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+          (drop_path): DropPath(drop_prob=0.027)
+        )
+        (1): ConvBlock(
+          (conv1): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          (norm1): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+          (act1): GELU(approximate='none')
+          (conv2): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          (norm2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+          (drop_path): DropPath(drop_prob=0.040)
+        )
+        (2): ConvBlock(
+          (conv1): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          (norm1): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+          (act1): GELU(approximate='none')
+          (conv2): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          (norm2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+          (drop_path): DropPath(drop_prob=0.053)
+        )
+      )
+      (downsample): Downsample(
+        (norm): LayerNorm2d((128,), eps=1e-06, elementwise_affine=True)
+        (reduction): Sequential(
+          (0): Conv2d(128, 256, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+        )
+      )
+    )
+    (2): FasterViTLayer(
+      (blocks): ModuleList(
+        (0): HAT(
+          (pos_embed): PosEmbMLPSwinv1D(
+            (cpb_mlp): Sequential(
+              (0): Linear(in_features=2, out_features=512, bias=True)
+              (1): ReLU()
+              (2): Linear(in_features=512, out_features=256, bias=False)
+            )
+          )
+          (norm1): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (attn): WindowAttention(
+            (qkv): Linear(in_features=256, out_features=768, bias=True)
+            (attn_drop): Dropout(p=0.0, inplace=False)
+            (proj): Linear(in_features=256, out_features=256, bias=True)
+            (proj_drop): Dropout(p=0.0, inplace=False)
+            (pos_emb_funct): PosEmbMLPSwinv2D(
+              (cpb_mlp): Sequential(
+                (0): Linear(in_features=2, out_features=512, bias=True)
+                (1): ReLU(inplace=True)
+                (2): Linear(in_features=512, out_features=8, bias=False)
+              )
+            )
+          )
+          (drop_path): DropPath(drop_prob=0.067)
+          (norm2): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (mlp): Mlp(
+            (fc1): Linear(in_features=256, out_features=1024, bias=True)
+            (act): GELU(approximate='none')
+            (fc2): Linear(in_features=1024, out_features=256, bias=True)
+            (drop): Dropout(p=0.0, inplace=False)
+          )
+          (hat_norm1): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (hat_norm2): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (hat_attn): WindowAttention(
+            (qkv): Linear(in_features=256, out_features=768, bias=True)
+            (attn_drop): Dropout(p=0.0, inplace=False)
+            (proj): Linear(in_features=256, out_features=256, bias=True)
+            (proj_drop): Dropout(p=0.0, inplace=False)
+            (pos_emb_funct): PosEmbMLPSwinv2D(
+              (cpb_mlp): Sequential(
+                (0): Linear(in_features=2, out_features=512, bias=True)
+                (1): ReLU(inplace=True)
+                (2): Linear(in_features=512, out_features=8, bias=False)
+              )
+            )
+          )
+          (hat_mlp): Mlp(
+            (fc1): Linear(in_features=256, out_features=1024, bias=True)
+            (act): GELU(approximate='none')
+            (fc2): Linear(in_features=1024, out_features=256, bias=True)
+            (drop): Dropout(p=0.0, inplace=False)
+          )
+          (hat_drop_path): DropPath(drop_prob=0.067)
+          (hat_pos_embed): PosEmbMLPSwinv1D(
+            (cpb_mlp): Sequential(
+              (0): Linear(in_features=2, out_features=512, bias=True)
+              (1): ReLU()
+              (2): Linear(in_features=512, out_features=256, bias=False)
+            )
+          )
+          (upsampler): Upsample(size=7, mode='nearest')
+        )
+        (1): HAT(
+          (pos_embed): PosEmbMLPSwinv1D(
+            (cpb_mlp): Sequential(
+              (0): Linear(in_features=2, out_features=512, bias=True)
+              (1): ReLU()
+              (2): Linear(in_features=512, out_features=256, bias=False)
+            )
+          )
+          (norm1): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (attn): WindowAttention(
+            (qkv): Linear(in_features=256, out_features=768, bias=True)
+            (attn_drop): Dropout(p=0.0, inplace=False)
+            (proj): Linear(in_features=256, out_features=256, bias=True)
+            (proj_drop): Dropout(p=0.0, inplace=False)
+            (pos_emb_funct): PosEmbMLPSwinv2D(
+              (cpb_mlp): Sequential(
+                (0): Linear(in_features=2, out_features=512, bias=True)
+                (1): ReLU(inplace=True)
+                (2): Linear(in_features=512, out_features=8, bias=False)
+              )
+            )
+          )
+          (drop_path): DropPath(drop_prob=0.080)
+          (norm2): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (mlp): Mlp(
+            (fc1): Linear(in_features=256, out_features=1024, bias=True)
+            (act): GELU(approximate='none')
+            (fc2): Linear(in_features=1024, out_features=256, bias=True)
+            (drop): Dropout(p=0.0, inplace=False)
+          )
+          (hat_norm1): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (hat_norm2): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (hat_attn): WindowAttention(
+            (qkv): Linear(in_features=256, out_features=768, bias=True)
+            (attn_drop): Dropout(p=0.0, inplace=False)
+            (proj): Linear(in_features=256, out_features=256, bias=True)
+            (proj_drop): Dropout(p=0.0, inplace=False)
+            (pos_emb_funct): PosEmbMLPSwinv2D(
+              (cpb_mlp): Sequential(
+                (0): Linear(in_features=2, out_features=512, bias=True)
+                (1): ReLU(inplace=True)
+                (2): Linear(in_features=512, out_features=8, bias=False)
+              )
+            )
+          )
+          (hat_mlp): Mlp(
+            (fc1): Linear(in_features=256, out_features=1024, bias=True)
+            (act): GELU(approximate='none')
+            (fc2): Linear(in_features=1024, out_features=256, bias=True)
+            (drop): Dropout(p=0.0, inplace=False)
+          )
+          (hat_drop_path): DropPath(drop_prob=0.080)
+          (hat_pos_embed): PosEmbMLPSwinv1D(
+            (cpb_mlp): Sequential(
+              (0): Linear(in_features=2, out_features=512, bias=True)
+              (1): ReLU()
+              (2): Linear(in_features=512, out_features=256, bias=False)
+            )
+          )
+          (upsampler): Upsample(size=7, mode='nearest')
+        )
+        (2): HAT(
+          (pos_embed): PosEmbMLPSwinv1D(
+            (cpb_mlp): Sequential(
+              (0): Linear(in_features=2, out_features=512, bias=True)
+              (1): ReLU()
+              (2): Linear(in_features=512, out_features=256, bias=False)
+            )
+          )
+          (norm1): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (attn): WindowAttention(
+            (qkv): Linear(in_features=256, out_features=768, bias=True)
+            (attn_drop): Dropout(p=0.0, inplace=False)
+            (proj): Linear(in_features=256, out_features=256, bias=True)
+            (proj_drop): Dropout(p=0.0, inplace=False)
+            (pos_emb_funct): PosEmbMLPSwinv2D(
+              (cpb_mlp): Sequential(
+                (0): Linear(in_features=2, out_features=512, bias=True)
+                (1): ReLU(inplace=True)
+                (2): Linear(in_features=512, out_features=8, bias=False)
+              )
+            )
+          )
+          (drop_path): DropPath(drop_prob=0.093)
+          (norm2): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (mlp): Mlp(
+            (fc1): Linear(in_features=256, out_features=1024, bias=True)
+            (act): GELU(approximate='none')
+            (fc2): Linear(in_features=1024, out_features=256, bias=True)
+            (drop): Dropout(p=0.0, inplace=False)
+          )
+          (hat_norm1): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (hat_norm2): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (hat_attn): WindowAttention(
+            (qkv): Linear(in_features=256, out_features=768, bias=True)
+            (attn_drop): Dropout(p=0.0, inplace=False)
+            (proj): Linear(in_features=256, out_features=256, bias=True)
+            (proj_drop): Dropout(p=0.0, inplace=False)
+            (pos_emb_funct): PosEmbMLPSwinv2D(
+              (cpb_mlp): Sequential(
+                (0): Linear(in_features=2, out_features=512, bias=True)
+                (1): ReLU(inplace=True)
+                (2): Linear(in_features=512, out_features=8, bias=False)
+              )
+            )
+          )
+          (hat_mlp): Mlp(
+            (fc1): Linear(in_features=256, out_features=1024, bias=True)
+            (act): GELU(approximate='none')
+            (fc2): Linear(in_features=1024, out_features=256, bias=True)
+            (drop): Dropout(p=0.0, inplace=False)
+          )
+          (hat_drop_path): DropPath(drop_prob=0.093)
+          (hat_pos_embed): PosEmbMLPSwinv1D(
+            (cpb_mlp): Sequential(
+              (0): Linear(in_features=2, out_features=512, bias=True)
+              (1): ReLU()
+              (2): Linear(in_features=512, out_features=256, bias=False)
+            )
+          )
+          (upsampler): Upsample(size=7, mode='nearest')
+        )
+        (3): HAT(
+          (pos_embed): PosEmbMLPSwinv1D(
+            (cpb_mlp): Sequential(
+              (0): Linear(in_features=2, out_features=512, bias=True)
+              (1): ReLU()
+              (2): Linear(in_features=512, out_features=256, bias=False)
+            )
+          )
+          (norm1): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (attn): WindowAttention(
+            (qkv): Linear(in_features=256, out_features=768, bias=True)
+            (attn_drop): Dropout(p=0.0, inplace=False)
+            (proj): Linear(in_features=256, out_features=256, bias=True)
+            (proj_drop): Dropout(p=0.0, inplace=False)
+            (pos_emb_funct): PosEmbMLPSwinv2D(
+              (cpb_mlp): Sequential(
+                (0): Linear(in_features=2, out_features=512, bias=True)
+                (1): ReLU(inplace=True)
+                (2): Linear(in_features=512, out_features=8, bias=False)
+              )
+            )
+          )
+          (drop_path): DropPath(drop_prob=0.107)
+          (norm2): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (mlp): Mlp(
+            (fc1): Linear(in_features=256, out_features=1024, bias=True)
+            (act): GELU(approximate='none')
+            (fc2): Linear(in_features=1024, out_features=256, bias=True)
+            (drop): Dropout(p=0.0, inplace=False)
+          )
+          (hat_norm1): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (hat_norm2): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (hat_attn): WindowAttention(
+            (qkv): Linear(in_features=256, out_features=768, bias=True)
+            (attn_drop): Dropout(p=0.0, inplace=False)
+            (proj): Linear(in_features=256, out_features=256, bias=True)
+            (proj_drop): Dropout(p=0.0, inplace=False)
+            (pos_emb_funct): PosEmbMLPSwinv2D(
+              (cpb_mlp): Sequential(
+                (0): Linear(in_features=2, out_features=512, bias=True)
+                (1): ReLU(inplace=True)
+                (2): Linear(in_features=512, out_features=8, bias=False)
+              )
+            )
+          )
+          (hat_mlp): Mlp(
+            (fc1): Linear(in_features=256, out_features=1024, bias=True)
+            (act): GELU(approximate='none')
+            (fc2): Linear(in_features=1024, out_features=256, bias=True)
+            (drop): Dropout(p=0.0, inplace=False)
+          )
+          (hat_drop_path): DropPath(drop_prob=0.107)
+          (hat_pos_embed): PosEmbMLPSwinv1D(
+            (cpb_mlp): Sequential(
+              (0): Linear(in_features=2, out_features=512, bias=True)
+              (1): ReLU()
+              (2): Linear(in_features=512, out_features=256, bias=False)
+            )
+          )
+          (upsampler): Upsample(size=7, mode='nearest')
+        )
+        (4): HAT(
+          (pos_embed): PosEmbMLPSwinv1D(
+            (cpb_mlp): Sequential(
+              (0): Linear(in_features=2, out_features=512, bias=True)
+              (1): ReLU()
+              (2): Linear(in_features=512, out_features=256, bias=False)
+            )
+          )
+          (norm1): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (attn): WindowAttention(
+            (qkv): Linear(in_features=256, out_features=768, bias=True)
+            (attn_drop): Dropout(p=0.0, inplace=False)
+            (proj): Linear(in_features=256, out_features=256, bias=True)
+            (proj_drop): Dropout(p=0.0, inplace=False)
+            (pos_emb_funct): PosEmbMLPSwinv2D(
+              (cpb_mlp): Sequential(
+                (0): Linear(in_features=2, out_features=512, bias=True)
+                (1): ReLU(inplace=True)
+                (2): Linear(in_features=512, out_features=8, bias=False)
+              )
+            )
+          )
+          (drop_path): DropPath(drop_prob=0.120)
+          (norm2): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (mlp): Mlp(
+            (fc1): Linear(in_features=256, out_features=1024, bias=True)
+            (act): GELU(approximate='none')
+            (fc2): Linear(in_features=1024, out_features=256, bias=True)
+            (drop): Dropout(p=0.0, inplace=False)
+          )
+          (hat_norm1): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (hat_norm2): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (hat_attn): WindowAttention(
+            (qkv): Linear(in_features=256, out_features=768, bias=True)
+            (attn_drop): Dropout(p=0.0, inplace=False)
+            (proj): Linear(in_features=256, out_features=256, bias=True)
+            (proj_drop): Dropout(p=0.0, inplace=False)
+            (pos_emb_funct): PosEmbMLPSwinv2D(
+              (cpb_mlp): Sequential(
+                (0): Linear(in_features=2, out_features=512, bias=True)
+                (1): ReLU(inplace=True)
+                (2): Linear(in_features=512, out_features=8, bias=False)
+              )
+            )
+          )
+          (hat_mlp): Mlp(
+            (fc1): Linear(in_features=256, out_features=1024, bias=True)
+            (act): GELU(approximate='none')
+            (fc2): Linear(in_features=1024, out_features=256, bias=True)
+            (drop): Dropout(p=0.0, inplace=False)
+          )
+          (hat_drop_path): DropPath(drop_prob=0.120)
+          (hat_pos_embed): PosEmbMLPSwinv1D(
+            (cpb_mlp): Sequential(
+              (0): Linear(in_features=2, out_features=512, bias=True)
+              (1): ReLU()
+              (2): Linear(in_features=512, out_features=256, bias=False)
+            )
+          )
+          (upsampler): Upsample(size=7, mode='nearest')
+        )
+        (5): HAT(
+          (pos_embed): PosEmbMLPSwinv1D(
+            (cpb_mlp): Sequential(
+              (0): Linear(in_features=2, out_features=512, bias=True)
+              (1): ReLU()
+              (2): Linear(in_features=512, out_features=256, bias=False)
+            )
+          )
+          (norm1): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (attn): WindowAttention(
+            (qkv): Linear(in_features=256, out_features=768, bias=True)
+            (attn_drop): Dropout(p=0.0, inplace=False)
+            (proj): Linear(in_features=256, out_features=256, bias=True)
+            (proj_drop): Dropout(p=0.0, inplace=False)
+            (pos_emb_funct): PosEmbMLPSwinv2D(
+              (cpb_mlp): Sequential(
+                (0): Linear(in_features=2, out_features=512, bias=True)
+                (1): ReLU(inplace=True)
+                (2): Linear(in_features=512, out_features=8, bias=False)
+              )
+            )
+          )
+          (drop_path): DropPath(drop_prob=0.133)
+          (norm2): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (mlp): Mlp(
+            (fc1): Linear(in_features=256, out_features=1024, bias=True)
+            (act): GELU(approximate='none')
+            (fc2): Linear(in_features=1024, out_features=256, bias=True)
+            (drop): Dropout(p=0.0, inplace=False)
+          )
+          (hat_norm1): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (hat_norm2): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (hat_attn): WindowAttention(
+            (qkv): Linear(in_features=256, out_features=768, bias=True)
+            (attn_drop): Dropout(p=0.0, inplace=False)
+            (proj): Linear(in_features=256, out_features=256, bias=True)
+            (proj_drop): Dropout(p=0.0, inplace=False)
+            (pos_emb_funct): PosEmbMLPSwinv2D(
+              (cpb_mlp): Sequential(
+                (0): Linear(in_features=2, out_features=512, bias=True)
+                (1): ReLU(inplace=True)
+                (2): Linear(in_features=512, out_features=8, bias=False)
+              )
+            )
+          )
+          (hat_mlp): Mlp(
+            (fc1): Linear(in_features=256, out_features=1024, bias=True)
+            (act): GELU(approximate='none')
+            (fc2): Linear(in_features=1024, out_features=256, bias=True)
+            (drop): Dropout(p=0.0, inplace=False)
+          )
+          (hat_drop_path): DropPath(drop_prob=0.133)
+          (hat_pos_embed): PosEmbMLPSwinv1D(
+            (cpb_mlp): Sequential(
+              (0): Linear(in_features=2, out_features=512, bias=True)
+              (1): ReLU()
+              (2): Linear(in_features=512, out_features=256, bias=False)
+            )
+          )
+          (upsampler): Upsample(size=7, mode='nearest')
+        )
+      )
+      (downsample): Downsample(
+        (norm): LayerNorm2d((256,), eps=1e-06, elementwise_affine=True)
+        (reduction): Sequential(
+          (0): Conv2d(256, 512, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+        )
+      )
+      (global_tokenizer): TokenInitializer(
+        (pos_embed): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), groups=256)
+        (to_global_feature): Sequential(
+          (pos): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), groups=256)
+          (pool): AvgPool2d(kernel_size=5, stride=3, padding=0)
+        )
+      )
+    )
+    (3): FasterViTLayer(
+      (blocks): ModuleList(
+        (0): HAT(
+          (pos_embed): PosEmbMLPSwinv1D(
+            (cpb_mlp): Sequential(
+              (0): Linear(in_features=2, out_features=512, bias=True)
+              (1): ReLU()
+              (2): Linear(in_features=512, out_features=512, bias=False)
+            )
+          )
+          (norm1): LayerNorm((512,), eps=1e-05, elementwise_affine=True)
+          (attn): WindowAttention(
+            (qkv): Linear(in_features=512, out_features=1536, bias=True)
+            (attn_drop): Dropout(p=0.0, inplace=False)
+            (proj): Linear(in_features=512, out_features=512, bias=True)
+            (proj_drop): Dropout(p=0.0, inplace=False)
+            (pos_emb_funct): PosEmbMLPSwinv2D(
+              (cpb_mlp): Sequential(
+                (0): Linear(in_features=2, out_features=512, bias=True)
+                (1): ReLU(inplace=True)
+                (2): Linear(in_features=512, out_features=16, bias=False)
+              )
+            )
+          )
+          (drop_path): DropPath(drop_prob=0.147)
+          (norm2): LayerNorm((512,), eps=1e-05, elementwise_affine=True)
+          (mlp): Mlp(
+            (fc1): Linear(in_features=512, out_features=2048, bias=True)
+            (act): GELU(approximate='none')
+            (fc2): Linear(in_features=2048, out_features=512, bias=True)
+            (drop): Dropout(p=0.0, inplace=False)
+          )
+        )
+        (1): HAT(
+          (pos_embed): PosEmbMLPSwinv1D(
+            (cpb_mlp): Sequential(
+              (0): Linear(in_features=2, out_features=512, bias=True)
+              (1): ReLU()
+              (2): Linear(in_features=512, out_features=512, bias=False)
+            )
+          )
+          (norm1): LayerNorm((512,), eps=1e-05, elementwise_affine=True)
+          (attn): WindowAttention(
+            (qkv): Linear(in_features=512, out_features=1536, bias=True)
+            (attn_drop): Dropout(p=0.0, inplace=False)
+            (proj): Linear(in_features=512, out_features=512, bias=True)
+            (proj_drop): Dropout(p=0.0, inplace=False)
+            (pos_emb_funct): PosEmbMLPSwinv2D(
+              (cpb_mlp): Sequential(
+                (0): Linear(in_features=2, out_features=512, bias=True)
+                (1): ReLU(inplace=True)
+                (2): Linear(in_features=512, out_features=16, bias=False)
+              )
+            )
+          )
+          (drop_path): DropPath(drop_prob=0.160)
+          (norm2): LayerNorm((512,), eps=1e-05, elementwise_affine=True)
+          (mlp): Mlp(
+            (fc1): Linear(in_features=512, out_features=2048, bias=True)
+            (act): GELU(approximate='none')
+            (fc2): Linear(in_features=2048, out_features=512, bias=True)
+            (drop): Dropout(p=0.0, inplace=False)
+          )
+        )
+        (2): HAT(
+          (pos_embed): PosEmbMLPSwinv1D(
+            (cpb_mlp): Sequential(
+              (0): Linear(in_features=2, out_features=512, bias=True)
+              (1): ReLU()
+              (2): Linear(in_features=512, out_features=512, bias=False)
+            )
+          )
+          (norm1): LayerNorm((512,), eps=1e-05, elementwise_affine=True)
+          (attn): WindowAttention(
+            (qkv): Linear(in_features=512, out_features=1536, bias=True)
+            (attn_drop): Dropout(p=0.0, inplace=False)
+            (proj): Linear(in_features=512, out_features=512, bias=True)
+            (proj_drop): Dropout(p=0.0, inplace=False)
+            (pos_emb_funct): PosEmbMLPSwinv2D(
+              (cpb_mlp): Sequential(
+                (0): Linear(in_features=2, out_features=512, bias=True)
+                (1): ReLU(inplace=True)
+                (2): Linear(in_features=512, out_features=16, bias=False)
+              )
+            )
+          )
+          (drop_path): DropPath(drop_prob=0.173)
+          (norm2): LayerNorm((512,), eps=1e-05, elementwise_affine=True)
+          (mlp): Mlp(
+            (fc1): Linear(in_features=512, out_features=2048, bias=True)
+            (act): GELU(approximate='none')
+            (fc2): Linear(in_features=2048, out_features=512, bias=True)
+            (drop): Dropout(p=0.0, inplace=False)
+          )
+        )
+        (3): HAT(
+          (pos_embed): PosEmbMLPSwinv1D(
+            (cpb_mlp): Sequential(
+              (0): Linear(in_features=2, out_features=512, bias=True)
+              (1): ReLU()
+              (2): Linear(in_features=512, out_features=512, bias=False)
+            )
+          )
+          (norm1): LayerNorm((512,), eps=1e-05, elementwise_affine=True)
+          (attn): WindowAttention(
+            (qkv): Linear(in_features=512, out_features=1536, bias=True)
+            (attn_drop): Dropout(p=0.0, inplace=False)
+            (proj): Linear(in_features=512, out_features=512, bias=True)
+            (proj_drop): Dropout(p=0.0, inplace=False)
+            (pos_emb_funct): PosEmbMLPSwinv2D(
+              (cpb_mlp): Sequential(
+                (0): Linear(in_features=2, out_features=512, bias=True)
+                (1): ReLU(inplace=True)
+                (2): Linear(in_features=512, out_features=16, bias=False)
+              )
+            )
+          )
+          (drop_path): DropPath(drop_prob=0.187)
+          (norm2): LayerNorm((512,), eps=1e-05, elementwise_affine=True)
+          (mlp): Mlp(
+            (fc1): Linear(in_features=512, out_features=2048, bias=True)
+            (act): GELU(approximate='none')
+            (fc2): Linear(in_features=2048, out_features=512, bias=True)
+            (drop): Dropout(p=0.0, inplace=False)
+          )
+        )
+        (4): HAT(
+          (pos_embed): PosEmbMLPSwinv1D(
+            (cpb_mlp): Sequential(
+              (0): Linear(in_features=2, out_features=512, bias=True)
+              (1): ReLU()
+              (2): Linear(in_features=512, out_features=512, bias=False)
+            )
+          )
+          (norm1): LayerNorm((512,), eps=1e-05, elementwise_affine=True)
+          (attn): WindowAttention(
+            (qkv): Linear(in_features=512, out_features=1536, bias=True)
+            (attn_drop): Dropout(p=0.0, inplace=False)
+            (proj): Linear(in_features=512, out_features=512, bias=True)
+            (proj_drop): Dropout(p=0.0, inplace=False)
+            (pos_emb_funct): PosEmbMLPSwinv2D(
+              (cpb_mlp): Sequential(
+                (0): Linear(in_features=2, out_features=512, bias=True)
+                (1): ReLU(inplace=True)
+                (2): Linear(in_features=512, out_features=16, bias=False)
+              )
+            )
+          )
+          (drop_path): DropPath(drop_prob=0.200)
+          (norm2): LayerNorm((512,), eps=1e-05, elementwise_affine=True)
+          (mlp): Mlp(
+            (fc1): Linear(in_features=512, out_features=2048, bias=True)
+            (act): GELU(approximate='none')
+            (fc2): Linear(in_features=2048, out_features=512, bias=True)
+            (drop): Dropout(p=0.0, inplace=False)
+          )
+        )
+      )
+    )
+  )
+  (norm): BatchNorm2d(512, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  (avgpool): AdaptiveAvgPool2d(output_size=1)
+  (head): Linear(in_features=512, out_features=1000, bias=True)
+)

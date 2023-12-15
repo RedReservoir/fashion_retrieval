@@ -1,0 +1,47 @@
+{
+    "experiment_name": "ret_train_pyr_2/convnext_t_s1/exp_003",
+    "settings": {
+        "device_idxs": [2, 4, 5, 6],
+        "backbone": {
+            "class": "ConvNeXtTinyPyramidBackbone",
+            "img_size": 224
+        },
+        "head": {
+            "class": "RetrievalHeadPyramidBottomUpInstantConv",
+            "in_feat_idxs": [0, 1, 2, 3],
+            "emb_size": 1024,
+            "conv_par_perc": 0
+        },
+        "data_loading": {
+            "cutdown_ratio": 1
+        },
+        "stage_1": {
+            "max_epochs": 5,
+            "optimizer": {
+                "class": "SGD",
+                "lr": 1e-3,
+                "momentum": 0.9
+            },
+            "scheduler": {
+                "class": "ExponentialLR",
+                "gamma": 0.95
+            },
+            "early_stopper": {
+                "patience": 5,
+                "min_delta": 1e-06
+            },
+            "data_loading": {
+                "train_random_seed": 42,
+                "batch_size": 32,
+                "num_workers": 4,
+                "grad_acc_iters": 1
+            },
+            "autocast": {
+                "enabled": false
+            },
+            "data_gradual_inc": {
+                "enabled": false
+            }
+        }
+    }
+}

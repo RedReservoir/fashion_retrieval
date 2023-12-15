@@ -1,0 +1,50 @@
+{
+    "experiment_name": "ret_train_old_smpl_2/convnext_t_s2/glam_000_exp_007",
+    "experiment_name_s1": "ret_train_old_smpl_2/convnext_t_s1/glam_000_exp_006",
+    "settings": {
+        "device_idxs": [6, 7, 8, 9],
+        "backbone": {
+            "class": "ConvNeXtTinyBackbone",
+            "img_size": 224
+        },
+        "head": {
+            "class": "RetrievalHeadGLAM",
+            "emb_size": 1024,
+            "glam_int_channels": 192,
+            "glam_1d_kernel_size": 3
+        },
+        "stage_2": {
+            "max_epochs": 10,
+            "eval_epoch_0": false,
+            "optimizer": {
+                "class": "SGD",
+                "lr": 1e-5,
+                "momentum": 0.9
+            },
+            "scheduler": {
+                "class": "ExponentialLR",
+                "gamma": 0.80
+            },
+            "early_stopper": {
+                "patience": 5,
+                "min_delta": 0
+            },
+            "data_loading": {
+                "batch_size": 16,
+                "num_workers": 4,
+                "grad_acc_iters": 1
+            },
+            "autocast": {
+                "enabled": false
+            },
+            "data_gradual_inc": {
+                "enabled": false
+            },
+            "ctsrbm_dataset": {
+                "neg_img_filename_list_id": "test_old",
+                "train_random_seed": 42,
+                "cutdown_ratio": 1
+            }
+        }
+    }
+}

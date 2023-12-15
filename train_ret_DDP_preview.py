@@ -2,50 +2,48 @@ import os
 import shutil
 import sys
 import pathlib
-import pickle as pkl
 import json
 import argparse
 import random as rd
 
-from contextlib import nullcontext
-
-import numpy as np
-import pandas as pd
-
-import torch
-import torchvision
-
-from torch.utils.data import DataLoader, Subset
-
-from datasets import deep_fashion_ctsrbm
-from arch import models, heads
-
 from tqdm import tqdm
-from fashion_retrieval.arch import backbones_cnn
-
-import utils.mem
-import utils.list
-import utils.train
-import utils.time
-import utils.log
-import utils.dict
-import utils.sig
-import utils.pkl
 
 from time import time
 from datetime import datetime
 
 from itertools import chain
-from functools import reduce
 
 import json
 import socket
+
+from contextlib import nullcontext
+
+########
+
+import numpy as np
+
+import torch
+
+from torch.utils.data import DataLoader, Subset
 
 from torch.distributed import init_process_group, destroy_process_group
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-import pprint
+########
+
+from src.datasets import deep_fashion_ctsrbm
+
+import src.utils.train
+import src.utils.log
+import src.utils.dict
+import src.utils.list
+import src.utils.memory
+import src.utils.signal
+import src.utils.time
+import src.utils.comps
+import src.utils.json
+import src.utils.dgi
 
 
 
@@ -53,9 +51,6 @@ import pprint
 # TIME FUNCTIONS
 ########
 
-
-
-cutdown_ratio = 0.1
 
 
 def compute_time(
@@ -84,292 +79,6 @@ def compute_time(
 
 
 ########
-# COMPONENT FUNCTIONS
-########
-
-
-
-def save_experiment_checkpoint(
-        experiment_checkpoint_filename,
-        backbone,
-        ret_head,
-        optimizer,
-        scheduler,
-        early_stopper,
-        best_tracker,
-        grad_scaler
-        ):
-
-    experiment_checkpoint = {}
-
-    experiment_checkpoint["backbone_state_dict"] = backbone.state_dict()
-    experiment_checkpoint["ret_head_state_dict"] = ret_head.state_dict()
-    experiment_checkpoint["optimizer_state_dict"] = optimizer.state_dict()
-    experiment_checkpoint["scheduler_state_dict"] = scheduler.state_dict()
-    experiment_checkpoint["early_stopper_state_dict"] = early_stopper.state_dict()
-    experiment_checkpoint["best_tracker_state_dict"] = best_tracker.state_dict()
-    if grad_scaler is not None:
-        experiment_checkpoint["grad_scaler_state_dict"] = grad_scaler.state_dict()
-
-    torch.save(experiment_checkpoint, experiment_checkpoint_filename)
-
-
-def create_backbone(backbone_options):
-
-    backbone_class = backbone_options["class"]
-
-    if backbone_class == "ResNet50Backbone":
-        backbone = backbones_cnn.ResNet50Backbone()
-    if backbone_class == "EfficientNetB2Backbone":
-        batchnorm_track_runnning_stats = backbone_options.get("batchnorm_track_runnning_stats", None)
-        backbone = backbones_cnn.EfficientNetB2Backbone(
-            batchnorm_track_runnning_stats=batchnorm_track_runnning_stats
-        )
-    if backbone_class == "EfficientNetB3Backbone":
-        batchnorm_track_runnning_stats = backbone_options.get("batchnorm_track_runnning_stats", None)
-        backbone = backbones_cnn.EfficientNetB3Backbone(
-            batchnorm_track_runnning_stats=batchnorm_track_runnning_stats
-        )
-    if backbone_class == "EfficientNetB4Backbone":
-        batchnorm_track_runnning_stats = backbone_options.get("batchnorm_track_runnning_stats", None)
-        backbone = backbones_cnn.EfficientNetB4Backbone(
-            batchnorm_track_runnning_stats=batchnorm_track_runnning_stats
-        )
-    if backbone_class == "EfficientNetB5Backbone":
-        batchnorm_track_runnning_stats = backbone_options.get("batchnorm_track_runnning_stats", None)
-        backbone = backbones_cnn.EfficientNetB5Backbone(
-            batchnorm_track_runnning_stats=batchnorm_track_runnning_stats
-        )
-    if backbone_class == "ConvNeXtTinyBackbone":
-        backbone = backbones_cnn.ConvNeXtTinyBackbone(contiguous_after_permute=True)
-
-    return backbone
-
-
-def create_ret_head(backbone):
-
-    ret_head = heads.RetHead(backbone.out_shape, 1024)
-
-    return ret_head
-
-
-def create_optimizer(
-        optimizer_params,
-        optimizer_options,
-        num_devices
-        ):
-    
-    optimizer_class = optimizer_options["class"]
-    
-    if optimizer_class == "Adam":
-        lr = optimizer_options["lr"] * num_devices
-        optimizer = torch.optim.Adam(optimizer_params, lr)
-    if optimizer_class == "SGD":
-        lr = optimizer_options["lr"] * num_devices
-        momentum = optimizer_options["momentum"]
-        optimizer = torch.optim.SGD(optimizer_params, lr, momentum)
-
-    return optimizer
-
-
-def create_scheduler(
-        optimizer,
-        scheduler_options
-        ):
-
-    scheduler_class = scheduler_options["class"]
-
-    if scheduler_class == "ExponentialLR":
-        gamma = scheduler_options["gamma"]
-        scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma)
-
-    return scheduler
-
-
-def create_early_stopper(
-        early_stopper_options
-        ):
-
-    patience = early_stopper_options["patience"]
-    min_delta = early_stopper_options["min_delta"]
-
-    early_stopper = utils.train.EarlyStopper(patience, min_delta)
-
-    return early_stopper
-
-
-def create_best_tracker():
-
-    early_stopper = utils.train.BestTracker(0)
-
-    return early_stopper
-
-
-def create_grad_scaler():
-
-    grad_scaler = torch.cuda.amp.GradScaler()
-
-    return grad_scaler
-
-
-
-########
-# EXPERIMENT DATA FUNCTIONS
-########
-
-
-
-def save_json_dict(
-        json_filename,
-        json_dict
-        ):
-
-    with open(json_filename, 'w') as json_file:
-        json.dump(json_dict, json_file, indent=4)
-
-
-def load_json_dict(
-        json_filename
-        ):
-
-    with open(json_filename, 'r') as json_file:
-        json_dict = json.load(json_file)
-
-    return json_dict
-
-
-def initialize_stage_1_exp_data(
-        exp_data,
-        exp_params
-        ):
-
-    # Settings
-
-    exp_data["settings"]["stage_1"] = {}
-    exp_data["settings"]["stage_1"].update(exp_params["settings"]["stage_1"])
-    
-    stage_description = "Train with frozen backbone"
-    exp_data["settings"]["stage_1"]["description"] = stage_description
-
-    exp_data["settings"]["stage_1"]["learning_rate_list"] = []
-   
-    exp_data["settings"]["stage_1"]["extra"] = [
-        "automatic_mixed_precision"
-    ]
-
-    # Results
-
-    exp_data["results"]["stage_1"] = {}
-
-    exp_data["results"]["stage_1"]["train_epoch_time_list"] = []
-    exp_data["results"]["stage_1"]["val_epoch_time_list"] = []
-
-    exp_data["results"]["stage_1"]["train_mean_loss_list"] = []
-    exp_data["results"]["stage_1"]["val_mean_loss_list"] = []
-
-    exp_data["results"]["stage_1"]["num_epochs"] = 0
-    exp_data["results"]["stage_1"]["finished"] = False
-
-    return exp_data
-
-
-def initialize_stage_2_exp_data(exp_data, exp_params):
-
-    # Settings
-
-    exp_data["settings"]["stage_2"] = {}
-    exp_data["settings"]["stage_2"].update(exp_params["settings"]["stage_2"])
-
-    stage_description = "Train entire model"
-    exp_data["settings"]["stage_2"]["description"] = stage_description
-        
-    exp_data["settings"]["stage_2"]["learning_rate_list"] = []
-
-    exp_data["settings"]["stage_2"]["extra"] = [
-        "automatic_mixed_precision"
-    ]
-    
-    # Results
-
-    exp_data["results"]["stage_2"] = {}
-
-    exp_data["results"]["stage_2"]["train_epoch_time_list"] = []
-    exp_data["results"]["stage_2"]["val_epoch_time_list"] = []
-
-    exp_data["results"]["stage_2"]["train_mean_loss_list"] = []
-    exp_data["results"]["stage_2"]["val_mean_loss_list"] = []
-
-    exp_data["results"]["stage_2"]["num_epochs"] = 0
-    exp_data["results"]["stage_2"]["finished"] = False
-
-    return exp_data
-
-
-def initialize_test_exp_data(
-        exp_data,
-        exp_params
-        ):
-
-    # Settings
-
-    exp_data["settings"]["test"] = {}
-    exp_data["settings"]["test"].update(exp_params["settings"]["test"])
-    
-    stage_description = "Test final model performance"
-    exp_data["settings"]["test"]["description"] = stage_description
-    
-    # Results
-
-    exp_data["results"]["test"] = {}
-
-    exp_data["results"]["test"]["finished"] = False
-
-    return exp_data
-
-
-
-########
-# DATASET AND LOADER FUNCTIONS
-########
-
-
-
-def get_backbone_image_transform(backbone_class):
-
-    if backbone_class == "ResNet50Backbone":
-        backbone_image_transform = torchvision.models.ResNet50_Weights.DEFAULT.transforms()
-    if backbone_class == "EfficientNetB2Backbone":
-        backbone_image_transform = torchvision.models.EfficientNet_B2_Weights.DEFAULT.transforms()
-    if backbone_class == "EfficientNetB3Backbone":
-        backbone_image_transform = torchvision.models.EfficientNet_B3_Weights.DEFAULT.transforms()
-    if backbone_class == "EfficientNetB4Backbone":
-        backbone_image_transform = torchvision.models.EfficientNet_B4_Weights.DEFAULT.transforms()
-    if backbone_class == "EfficientNetB5Backbone":
-        backbone_image_transform = torchvision.models.EfficientNet_B5_Weights.DEFAULT.transforms()
-    if backbone_class == "ConvNeXtTinyBackbone":
-        backbone_image_transform = torchvision.models.ConvNeXt_Tiny_Weights.DEFAULT.transforms()
-
-    return backbone_image_transform
-
-
-def compute_gradual_inc_cutdown_ratio(
-        current_epoch_num,
-        dgi_num_epochs,
-        dgi_init_ratio
-        ):
-
-    cutdown_ratio = 1
-
-    if current_epoch_num == 1:
-        cutdown_ratio = dgi_init_ratio
-    elif 2 <= current_epoch_num and current_epoch_num <= dgi_num_epochs - 1:
-        cutdown_ratio = dgi_init_ratio + ((1 - dgi_init_ratio) / (2 ** (dgi_num_epochs - current_epoch_num)))
-
-    return cutdown_ratio
-
-
-
-########
 # TRAIN & EVAL FUNCTIONS
 ########
 
@@ -383,7 +92,8 @@ def train_epoch(
         device,
         logger,
         grad_acc_iters=1,
-        with_tqdm=True
+        with_tqdm=True,
+        rank=0
     ):
 
     ret_model.train()
@@ -394,12 +104,23 @@ def train_epoch(
     with_amp = grad_scaler is not None
 
     loader_gen = data_loader
-    if with_tqdm: loader_gen = tqdm(loader_gen)
+    if with_tqdm: loader_gen = tqdm(
+            loader_gen,
+            total=len(loader_gen),
+            miniters=int(np.ceil(len(loader_gen)/40)),
+            file=logger,
+            ascii=False,
+            desc="      Progress",
+            ncols=0,
+            mininterval=0,
+            maxinterval=float("inf"),
+            smoothing=0.99
+            )
 
     preview__overhead_time_iter = 0
     preview__overhead_1_time_start = time()
     preview__loader_time_start = time()
-
+        
     for batch in loader_gen:
             
         if preview__overhead_time_iter == 1:
@@ -407,7 +128,7 @@ def train_epoch(
             preview__overhead_1_time_end = time()
 
         preview__overhead_time_iter += 1
-
+            
         batch_loss = batch_evaluation(batch, ret_model, device, logger, with_amp=with_amp)
         total_loss_item += batch_loss.sum().item()
 
@@ -463,7 +184,18 @@ def eval_epoch(
     with torch.no_grad():
 
         loader_gen = data_loader
-        if with_tqdm: loader_gen = tqdm(loader_gen)
+        if with_tqdm: loader_gen = tqdm(
+                loader_gen,
+                total=len(loader_gen),
+                miniters=int(np.ceil(len(loader_gen)/40)),
+                file=logger,
+                ascii=False,
+                desc="      Progress",
+                ncols=0,
+                mininterval=0,
+                maxinterval=float("inf"),
+                smoothing=0.99
+                )
 
         preview__overhead_time_iter = 0
         preview__overhead_1_time_start = time()
@@ -545,6 +277,7 @@ def execute_stage_1_DDP(
     finished_mp
 ):
 
+
     # Prepare logger
 
     experiment_name = exp_params["experiment_name"]
@@ -556,7 +289,10 @@ def execute_stage_1_DDP(
     logger_streams = [log_full_filename]
     if not command_args.terminal_silent: logger_streams.append(sys.stdout)
 
-    logger = utils.log.Logger(logger_streams)
+    logger = src.utils.log.Logger(logger_streams)
+
+    sys.stderr = logger
+
 
     # PyTorch DDP stuff
 
@@ -566,73 +302,45 @@ def execute_stage_1_DDP(
     init_process_group(backend="nccl", rank=rank, world_size=world_size)
 
     device = torch.device(rank)
-    
-    # Dataset initialization
+    num_devices = len(exp_params["settings"]["device_idxs"])
 
-    backbone_image_transform = get_backbone_image_transform(exp_params["settings"]["backbone"]["class"])
-    backbone_image_transform.antialias = True
-
-    ctsrbm_dataset_dir = os.path.join(pathlib.Path.home(), "data", "DeepFashion", "Consumer-to-shop Clothes Retrieval Benchmark")
-
-    ctsrbm_dataset = deep_fashion_ctsrbm.ConsToShopClothRetrBmkDataset(ctsrbm_dataset_dir, img_transform=backbone_image_transform, neg_img_filename_list_id="test")
-
-    ctsrbm_train_idxs = ctsrbm_dataset.get_subset_indices(split="train")
-    ctsrbm_val_idxs = ctsrbm_dataset.get_subset_indices(split="val")
-
-    if rank == 0:
-        dataset_random_seed_mp = rd.randrange(sys.maxsize)
-
-    torch.distributed.barrier()
-
-    state = np.random.get_state()
-    np.random.seed = dataset_random_seed_mp
-    np.random.shuffle(ctsrbm_train_idxs)
-    np.random.set_state(state)
-
-    # Validation dataloader initialization
-
-    batch_size = exp_params["settings"]["stage_1"]["data_loading"]["batch_size"]
-    num_workers = exp_params["settings"]["stage_1"]["data_loading"]["num_workers"]
-
-    if cutdown_ratio != 1:
-
-        ctsrbm_val_idxs = utils.list.cutdown_list(ctsrbm_val_idxs, cutdown_ratio)
-        logger.print("  [Rank {:d}] Reduced size of val split to {:.2f}%".format(rank, cutdown_ratio * 100))
-
-    ctsrbm_val_dataset = Subset(ctsrbm_dataset, ctsrbm_val_idxs)
-
-    ctsrbm_val_loader = DataLoader(
-        ctsrbm_val_dataset,
-        batch_size=batch_size,
-        num_workers=num_workers,
-        pin_memory=True,
-        shuffle=False,
-        sampler=DistributedSampler(ctsrbm_val_dataset)
-    )
 
     # Load or initialize components
 
-    backbone = create_backbone(exp_params["settings"]["backbone"])
+    backbone = src.utils.comps.create_backbone(exp_params["settings"]["backbone"])
     backbone = backbone.to(device)
 
-    ret_head = create_ret_head(backbone)
+    ret_head = src.utils.comps.create_ret_head(
+        backbone,
+        exp_params["settings"]["ret_head"]
+    )
     ret_head = ret_head.to(device)
 
     optimizer_params = ret_head.parameters()
 
-    optimizer = create_optimizer(
+    batch_size = exp_params["settings"]["stage_1"]["data_loading"]["batch_size"]
+    num_devices = len(exp_params["settings"]["device_idxs"])
+    grad_acc_iters = src.utils.dict.chain_get(
+        exp_params,
+        "settings", "stage_1", "data_loading", "grad_acc_iters",
+        default=1
+    )    
+
+    optimizer = src.utils.comps.create_optimizer(
         optimizer_params,
         exp_params["settings"]["stage_1"]["optimizer"],
-        len(exp_params["settings"]["device_idxs"])
+        batch_size,
+        num_devices,
+        grad_acc_iters
         )
 
-    scheduler = create_scheduler(
+    scheduler = src.utils.comps.create_scheduler(
         optimizer,
         exp_params["settings"]["stage_1"]["scheduler"]
         )
 
-    early_stopper = create_early_stopper(exp_params["settings"]["stage_1"]["early_stopper"])
-    best_tracker = create_best_tracker()
+    early_stopper = src.utils.comps.create_early_stopper(exp_params["settings"]["stage_1"]["early_stopper"])
+    best_tracker = src.utils.comps.create_best_tracker()
 
     grad_scaler = None
 
@@ -644,7 +352,7 @@ def execute_stage_1_DDP(
     if num_epochs != 0:
 
         last_stage_1_experiment_checkpoint_filename = os.path.join(
-            experiment_dirname, "train_ret_DDP_preview__last_stage_1_ckp.pth", device
+            experiment_dirname, "train_ret_DDP_preview_stage_1__last_ckp.pth"
         )
 
         experiment_checkpoint = torch.load(last_stage_1_experiment_checkpoint_filename)
@@ -658,25 +366,80 @@ def execute_stage_1_DDP(
         if exp_params["settings"]["stage_1"]["autocast"]["enabled"]:
             grad_scaler.load_state_dict(experiment_checkpoint["grad_scaler_state_dict"])
 
-    ret_model = models.BackboneAndHead(backbone, ret_head).to(device)
-    ret_model = DDP(ret_model, device_ids=[rank], find_unused_parameters=True, broadcast_buffers=False)
+    for param in backbone.parameters():
+        param.requires_grad = False  
 
-    # General settings
+    ret_model = torch.nn.Sequential(backbone, ret_head).to(device)
+    ret_model = DDP(ret_model, device_ids=[rank], find_unused_parameters=False, broadcast_buffers=False)
 
-    with_tqdm = not command_args.no_tqdm and not command_args.terminal_silent
 
-    grad_acc_iters = utils.dict.chain_get(
+    # Dataset initialization
+
+    ctsrbm_dataset_dir = os.path.join(pathlib.Path.home(), "data", "DeepFashion", "Consumer-to-shop Clothes Retrieval Benchmark")
+    backbone_image_transform = backbone.get_image_transform()
+
+    ctsrbm_dataset = deep_fashion_ctsrbm.ConsToShopClothRetrBmkDataset(ctsrbm_dataset_dir, img_transform=backbone_image_transform, neg_img_filename_list_id="test")
+
+    ctsrbm_train_idxs = ctsrbm_dataset.get_subset_indices(split="train")
+    ctsrbm_val_idxs = ctsrbm_dataset.get_subset_indices(split="val")
+
+    ## Train idxs shuffle
+
+    if rank == 0:
+
+        train_random_seed = exp_params["settings"]["stage_1"]["data_loading"].get("train_random_seed", None)
+        if train_random_seed is None: train_random_seed = rd.randrange(sys.maxsize)
+
+        exp_data["settings"]["stage_1"]["data_loading"]["train_random_seed"] = train_random_seed
+        dataset_random_seed_mp = train_random_seed      
+
+    torch.distributed.barrier()
+
+    state = np.random.get_state()
+    np.random.seed = dataset_random_seed_mp
+    np.random.shuffle(ctsrbm_train_idxs)
+    np.random.set_state(state)
+
+    ## General cutdown ratio
+
+    cutdown_ratio = exp_params["settings"]["data_loading"].get("cutdown_ratio", 1)
+    if cutdown_ratio != 1:
+        ctsrbm_train_idxs = src.utils.list.cutdown_list(ctsrbm_train_idxs, cutdown_ratio)
+        ctsrbm_val_idxs = src.utils.list.cutdown_list(ctsrbm_val_idxs, cutdown_ratio)
+
+
+    # Validation dataloader initialization
+
+    batch_size = exp_params["settings"]["stage_1"]["data_loading"]["batch_size"]
+    num_workers = exp_params["settings"]["stage_1"]["data_loading"]["num_workers"]
+
+    ctsrbm_val_dataset = Subset(ctsrbm_dataset, ctsrbm_val_idxs)
+
+    ctsrbm_val_loader = DataLoader(
+        ctsrbm_val_dataset,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        pin_memory=True,
+        shuffle=False,
+        sampler=DistributedSampler(ctsrbm_val_dataset)
+    )
+
+
+    # Other settings
+
+    with_tqdm = (not command_args.no_tqdm) and (rank == 0)
+
+    grad_acc_iters = src.utils.dict.chain_get(
         exp_params,
         "settings", "stage_1", "data_loading", "grad_acc_iters",
         default=1
-    )
+    )    
 
-    for param in backbone.parameters():
-        param.requires_grad = False      
 
     # Training loop
 
-    logger.print("  [Rank {:d}] Training Loop Begin".format(rank))
+    if rank == 0:
+        logger.print("  [Rank {:d}] Training Loop Begin".format(rank))
 
     num_epochs = exp_data["results"]["stage_1"]["num_epochs"]
     max_epochs = exp_params["settings"]["stage_1"]["max_epochs"]    
@@ -691,38 +454,34 @@ def execute_stage_1_DDP(
         ## Epoch pre-processing
 
         num_epochs += 1
-
-        logger.print("  [Rank {:d}] Entering epoch {:d}".format(
-            rank,
-            num_epochs
-        ))
+    
+        if rank == 0:
+            logger.print("  [Rank {:d}] Entering epoch {:d}".format(
+                rank,
+                num_epochs
+            ))
 
         ## Train dataloader initialization
 
-        cutdown_ctsrbm_train_idxs = ctsrbm_train_idxs
-
-        if cutdown_ratio != 1:
-
-                cutdown_ctsrbm_train_idxs = utils.list.cutdown_list(cutdown_ctsrbm_train_idxs, cutdown_ratio)
-                logger.print("  [Rank {:d}] Reduced size of train split to {:.2f}%".format(rank, cutdown_ratio * 100))
+        ctsrbm_train_dataset = Subset(ctsrbm_dataset, ctsrbm_train_idxs)
 
         """
         if exp_params["settings"]["stage_1"]["data_gradual_inc"]["enabled"]:
 
-            cutdown_ratio = compute_gradual_inc_cutdown_ratio(
+            dgi_ratio = src.utils.dgi.compute_dgi_ratio(
                 num_epochs,
                 exp_params["settings"]["stage_1"]["data_gradual_inc"]["num_epochs"],
                 exp_params["settings"]["stage_1"]["data_gradual_inc"]["init_perc"] / 100
                 )
 
-            if cutdown_ratio != 1:
+            if dgi_ratio != 1:
 
-                cutdown_ctsrbm_train_idxs = utils.list.cutdown_list(cutdown_ctsrbm_train_idxs, cutdown_ratio)
-                
-                logger.print("  [Rank {:d}] Reduced size of train split to {:.2f}%".format(rank, cutdown_ratio * 100))
+                ctsrbm_train_dataset = Subset(ctsrbm_dataset, src.utils.list.cutdown_list(ctsrbm_train_idxs, dgi_ratio))
+
+                if rank == 0:
+                    logger.print("  [Rank {:d}] Reduced size of train split to {:2.2f}%".format(rank, dgi_ratio * 100))
+
         """
-
-        ctsrbm_train_dataset = Subset(ctsrbm_dataset, cutdown_ctsrbm_train_idxs)
 
         ctsrbm_train_loader = DataLoader(
             ctsrbm_train_dataset,
@@ -735,6 +494,9 @@ def execute_stage_1_DDP(
 
         ## Training
 
+        if rank == 0:
+            logger.print("    [Rank {:d}] Training...".format(rank))
+
         start_time = time()
 
         train_loss, preview__train_overhead_1_time, preview__train_loader_time =\
@@ -746,7 +508,8 @@ def execute_stage_1_DDP(
             device,
             logger,
             grad_acc_iters=grad_acc_iters,
-            with_tqdm=with_tqdm
+            with_tqdm=with_tqdm,
+            rank=rank
         )
 
         end_time = time()
@@ -754,17 +517,26 @@ def execute_stage_1_DDP(
         train_epoch_time = end_time - start_time
         train_mean_loss = train_loss / len(ctsrbm_train_loader)
 
-        logger.print("  [Rank {:d}] Train epoch time: {:s}".format(
+        torch.distributed.barrier()
+
+        logger.print("    [Rank {:d}] Train epoch time: {:s}".format(
             rank,
-            utils.time.sprint_fancy_time_diff(train_epoch_time)
+            src.utils.time.sprint_fancy_time_diff(train_epoch_time)
         ))
 
-        logger.print("  [Rank {:d}] Train mean loss:  {:.2e}".format(
+        torch.distributed.barrier()
+
+        logger.print("    [Rank {:d}] Train mean loss:  {:.2e}".format(
             rank,
             train_mean_loss
         ))
 
+        torch.distributed.barrier()
+
         ## Validation
+
+        if rank == 0:
+            logger.print("    [Rank {:d}] Validation...".format(rank))
 
         start_time = time()
 
@@ -782,24 +554,28 @@ def execute_stage_1_DDP(
         val_epoch_time = end_time - start_time
         val_mean_loss = val_loss / len(ctsrbm_val_loader)
 
-        logger.print("  [Rank {:d}] Val epoch time:   {:s}".format(
+        torch.distributed.barrier()
+
+        logger.print("    [Rank {:d}] Val epoch time:   {:s}".format(
             rank,
-            utils.time.sprint_fancy_time_diff(train_epoch_time)
+            src.utils.time.sprint_fancy_time_diff(train_epoch_time)
         ))
 
-        logger.print("  [Rank {:d}] Val mean loss:    {:.2e}".format(
+        torch.distributed.barrier()
+
+        logger.print("    [Rank {:d}] Val mean loss:    {:.2e}".format(
             rank,
             train_mean_loss
         ))
+
+        torch.distributed.barrier()
+
+        ## Scheduler update
 
         if rank == 0:
             exp_data["settings"]["stage_1"]["learning_rate_list"].append(scheduler.get_last_lr()[0])
 
         scheduler.step()
-
-        if rank == 0:
-            logger.print("  [Rank {:d}] Current memory usage:".format(rank))
-            logger.print(utils.mem.sprint_memory_usage(exp_params["settings"]["device_idxs"], num_spaces=4))
 
         ## Track results
 
@@ -817,6 +593,12 @@ def execute_stage_1_DDP(
 
             exp_data["results"]["stage_1"]["train_mean_loss_list"].append(list(train_mean_loss_list_mp))
             exp_data["results"]["stage_1"]["val_mean_loss_list"].append(list(val_mean_loss_list_mp))
+
+        ## Memory profiling
+
+        if rank == 0:
+            logger.print("    [Rank {:d}] Current memory usage:".format(rank))
+            logger.print(src.utils.memory.sprint_memory_usage(exp_params["settings"]["device_idxs"], num_spaces=6))
         
         ## Time calculations
 
@@ -846,7 +628,7 @@ def execute_stage_1_DDP(
             if exp_params["settings"]["stage_1"]["data_gradual_inc"]["enabled"]:
                 train_num_epochs = 0
                 for epoch_num in range(1, max_epochs+1):
-                    train_num_epochs += compute_gradual_inc_cutdown_ratio(
+                    train_num_epochs += src.utils.dgi.compute_dgi_ratio(
                         epoch_num,
                         exp_params["settings"]["stage_1"]["data_gradual_inc"]["num_epochs"],
                         exp_params["settings"]["stage_1"]["data_gradual_inc"]["init_perc"] / 100
@@ -858,16 +640,17 @@ def execute_stage_1_DDP(
             full_val_time = full_val_epoch_time * max_epochs
             full_time = full_train_time + full_val_time
 
-            gpu_mem_b = utils.mem.list_gpu_usage(exp_params["settings"]["device_idxs"])[0]["device_usage"]
+            gpu_mem_b = src.utils.memory.list_gpu_usage(exp_params["settings"]["device_idxs"])[0]["device_usage"]
 
-            logger.print("Stage 1 Preview", "train_epoch_time", train_epoch_time, utils.time.sprint_fancy_time_diff(train_epoch_time))
-            logger.print("Stage 1 Preview", "val_epoch_time", val_epoch_time, utils.time.sprint_fancy_time_diff(val_epoch_time))
-            logger.print("Stage 1 Preview", "full_train_epoch_time", full_train_epoch_time, utils.time.sprint_fancy_time_diff(full_train_epoch_time))
-            logger.print("Stage 1 Preview", "full_val_epoch_time", full_val_epoch_time, utils.time.sprint_fancy_time_diff(full_val_epoch_time))
-            logger.print("Stage 1 Preview", "full_train_time", full_train_time, utils.time.sprint_fancy_time_diff(full_train_time))
-            logger.print("Stage 1 Preview", "full_val_time", full_val_time, utils.time.sprint_fancy_time_diff(full_val_time))
-            logger.print("Stage 1 Preview", "full_time", full_time, utils.time.sprint_fancy_time_diff(full_time))
-            logger.print("Stage 1 Preview", "gpu_mem_b", gpu_mem_b, utils.mem.sprint_fancy_num_bytes(gpu_mem_b))
+            logger.print("Stage 1 Preview", "train_epoch_time", train_epoch_time, src.utils.time.sprint_fancy_time_diff(train_epoch_time))
+            logger.print("Stage 1 Preview", "val_epoch_time", val_epoch_time, src.utils.time.sprint_fancy_time_diff(val_epoch_time))
+            logger.print("Stage 1 Preview", "full_train_epoch_time", full_train_epoch_time, src.utils.time.sprint_fancy_time_diff(full_train_epoch_time))
+            logger.print("Stage 1 Preview", "full_val_epoch_time", full_val_epoch_time, src.utils.time.sprint_fancy_time_diff(full_val_epoch_time))
+            logger.print("Stage 1 Preview", "full_train_time", full_train_time, src.utils.time.sprint_fancy_time_diff(full_train_time))
+            logger.print("Stage 1 Preview", "full_val_time", full_val_time, src.utils.time.sprint_fancy_time_diff(full_val_time))
+            logger.print("Stage 1 Preview", "full_time", full_time, src.utils.time.sprint_fancy_time_diff(full_time))
+            logger.print("Stage 1 Preview", "gpu_mem_b", gpu_mem_b, src.utils.memory.sprint_fancy_num_bytes(gpu_mem_b))
+
 
         ## Training conditions and checkpoints
 
@@ -889,33 +672,38 @@ def execute_stage_1_DDP(
 
             ## Checkpoint saving
 
-            with utils.sig.DelayedInterrupt():
+            with src.utils.signal.DelayedInterrupt():
+
+                experiment_checkpoint = {}
+
+                experiment_checkpoint["backbone_state_dict"] = backbone.state_dict()
+                experiment_checkpoint["ret_head_state_dict"] = ret_head.state_dict()
+                experiment_checkpoint["optimizer_state_dict"] = optimizer.state_dict()
+                experiment_checkpoint["scheduler_state_dict"] = scheduler.state_dict()
+                experiment_checkpoint["early_stopper_state_dict"] = early_stopper.state_dict()
+                experiment_checkpoint["best_tracker_state_dict"] = best_tracker.state_dict()
+                if grad_scaler is not None:
+                    experiment_checkpoint["grad_scaler_state_dict"] = grad_scaler.state_dict()
 
                 ## Save best component checkpoint
 
                 if best_tracker.is_best(sum(train_mean_loss_list_mp)):
 
                     best_stage_1_experiment_checkpoint_filename = os.path.join(
-                        experiment_dirname, "train_ret_DDP_preview__best_stage_1_ckp.pth"
+                        experiment_dirname, "train_ret_DDP_preview_stage_1__best_ckp.pth"
                     )
 
-                    logger.print("  [Rank {:d}] Saving currently best model to \"{:s}\"".format(
+                    logger.print("    [Rank {:d}] Saving currently best model to \"{:s}\"".format(
                         rank,
                         best_stage_1_experiment_checkpoint_filename
                     ))
 
-                    save_experiment_checkpoint(
-                        best_stage_1_experiment_checkpoint_filename,
-                        backbone,
-                        ret_head,
-                        optimizer,
-                        scheduler,
-                        early_stopper,
-                        best_tracker,
-                        grad_scaler
-                        )
+                    torch.save(
+                        experiment_checkpoint,
+                        best_stage_1_experiment_checkpoint_filename
+                    )
 
-                    logger.print("  [Rank {:d}] Saved currently best model to \"{:s}\"".format(
+                    logger.print("    [Rank {:d}] Saved currently best model to \"{:s}\"".format(
                         rank,
                         best_stage_1_experiment_checkpoint_filename
                     ))
@@ -929,16 +717,16 @@ def execute_stage_1_DDP(
                     experiment_dirname, "train_ret_DDP_preview__data.json"
                 )
 
-                logger.print("  [Rank {:d}] Saving experiment data to \"{:s}\"".format(
+                logger.print("    [Rank {:d}] Saving experiment data to \"{:s}\"".format(
                     rank,
                     exp_data_filename
                 ))
 
-                save_json_dict(
+                src.utils.json.save_json_dict(
                     exp_data_filename, exp_data
                 )
 
-                logger.print("  [Rank {:d}] Saved experiment data to \"{:s}\"".format(
+                logger.print("    [Rank {:d}] Saved experiment data to \"{:s}\"".format(
                     rank,
                     exp_data_filename
                 ))
@@ -946,33 +734,29 @@ def execute_stage_1_DDP(
                 ## Save last component checkpoint
                 
                 last_stage_1_experiment_checkpoint_filename = os.path.join(
-                    experiment_dirname, "train_ret_DDP_preview__last_stage_1_ckp.pth"
+                    experiment_dirname, "train_ret_DDP_preview_stage_1__last_ckp.pth"
                 )
 
-                logger.print("  [Rank {:d}] Saving last epoch model to \"{:s}\"".format(
+                logger.print("    [Rank {:d}] Saving last epoch model to \"{:s}\"".format(
                     rank,
                     last_stage_1_experiment_checkpoint_filename
                 ))
 
-                save_experiment_checkpoint(
-                    last_stage_1_experiment_checkpoint_filename,
-                    backbone,
-                    ret_head,
-                    optimizer,
-                    scheduler,
-                    early_stopper,
-                    best_tracker,
-                    grad_scaler
+                torch.save(
+                    experiment_checkpoint,
+                    last_stage_1_experiment_checkpoint_filename
                 )
 
-                logger.print("  [Rank {:d}] Saved last epoch model to \"{:s}\"".format(
+                logger.print("    [Rank {:d}] Saved last epoch model to \"{:s}\"".format(
                     rank,
                     last_stage_1_experiment_checkpoint_filename
                 ))
 
         torch.distributed.barrier()
 
-    logger.print("  [Rank {:d}] Training Loop End".format(rank))
+    if rank == 0:
+        logger.print("    [Rank {:d}] Training Loop End".format(rank))
+
 
     # PyTorch DDP stuff
 
@@ -993,6 +777,7 @@ def execute_stage_2_DDP(
     finished_mp
 ):
 
+
     # Prepare logger
 
     experiment_name = exp_params["experiment_name"]
@@ -1004,13 +789,12 @@ def execute_stage_2_DDP(
     logger_streams = [log_full_filename]
     if not command_args.terminal_silent: logger_streams.append(sys.stdout)
 
-    logger = utils.log.Logger(logger_streams)
+    logger = src.utils.log.Logger(logger_streams)
 
-    logger.print("  [Rank {:d}] Logger prepared".format(rank))
+    sys.stderr = logger
+
 
     # PyTorch DDP stuff
-
-    logger.print("  [Rank {:d}] DDP Setup Preparing...".format(rank))
 
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "{:d}".format(command_args.master_port)
@@ -1018,21 +802,107 @@ def execute_stage_2_DDP(
     init_process_group(backend="nccl", rank=rank, world_size=world_size)
 
     device = torch.device(rank)
+    num_devices = len(exp_params["settings"]["device_idxs"])
     
+
+    # Load or initialize components
+
+    backbone = src.utils.comps.create_backbone(exp_params["settings"]["backbone"])
+    backbone = backbone.to(device)
+
+    ret_head = src.utils.comps.create_ret_head(
+        backbone,
+        exp_params["settings"]["ret_head"]
+    )
+    ret_head = ret_head.to(device)
+
+    optimizer_params = chain(
+        backbone.parameters(),
+        ret_head.parameters()
+    )
+
+    batch_size = exp_params["settings"]["stage_2"]["data_loading"]["batch_size"]
+    num_devices = len(exp_params["settings"]["device_idxs"])
+    grad_acc_iters = src.utils.dict.chain_get(
+        exp_params,
+        "settings", "stage_2", "data_loading", "grad_acc_iters",
+        default=1
+    )    
+
+    optimizer = src.utils.comps.create_optimizer(
+        optimizer_params,
+        exp_params["settings"]["stage_2"]["optimizer"],
+        exp_params["settings"]["stage_2"]["data_loading"]["batch_size"],
+        num_devices,
+        grad_acc_iters
+        )
+
+    scheduler = src.utils.comps.create_scheduler(
+        optimizer,
+        exp_params["settings"]["stage_2"]["scheduler"]
+        )
+
+    early_stopper = src.utils.comps.create_early_stopper(exp_params["settings"]["stage_2"]["early_stopper"])
+    best_tracker = src.utils.comps.create_best_tracker()
+
+    grad_scaler = None
+
+    if exp_params["settings"]["stage_2"]["autocast"]["enabled"]:
+        grad_scaler = torch.cuda.amp.GradScaler()
+
+    num_epochs = exp_data["results"]["stage_2"]["num_epochs"]
+
+    if num_epochs == 0:
+
+        best_stage_1_experiment_checkpoint_filename = os.path.join(
+            experiment_dirname, "train_ret_DDP_preview_stage_1__best_ckp.pth"
+        )
+
+        experiment_checkpoint = torch.load(best_stage_1_experiment_checkpoint_filename)
+
+        backbone.load_state_dict(experiment_checkpoint["backbone_state_dict"])
+        ret_head.load_state_dict(experiment_checkpoint["ret_head_state_dict"])
+
+    else:
+
+        last_stage_2_experiment_checkpoint_filename = os.path.join(
+            experiment_dirname, "train_ret_DDP_preview_stage_2__last_ckp.pth"
+        )
+
+        experiment_checkpoint = torch.load(last_stage_2_experiment_checkpoint_filename)
+
+        backbone.load_state_dict(experiment_checkpoint["backbone_state_dict"])
+        ret_head.load_state_dict(experiment_checkpoint["ret_head_state_dict"])
+        optimizer.load_state_dict(experiment_checkpoint["optimizer_state_dict"])
+        scheduler.load_state_dict(experiment_checkpoint["scheduler_state_dict"])
+        early_stopper.load_state_dict(experiment_checkpoint["early_stopper_state_dict"])
+        best_tracker.load_state_dict(experiment_checkpoint["best_tracker_state_dict"])
+        if exp_params["settings"]["stage_2"]["autocast"]["enabled"]:
+            grad_scaler.load_state_dict(experiment_checkpoint["grad_scaler_state_dict"])
+
+    ret_model = torch.nn.Sequential(backbone, ret_head).to(device)
+    ret_model = DDP(ret_model, device_ids=[rank], broadcast_buffers=False)
+
+
     # Dataset initialization
 
-    backbone_image_transform = get_backbone_image_transform(exp_params["settings"]["backbone"]["class"])
-    backbone_image_transform.antialias = True
-
     ctsrbm_dataset_dir = os.path.join(pathlib.Path.home(), "data", "DeepFashion", "Consumer-to-shop Clothes Retrieval Benchmark")
+    backbone_image_transform = backbone.get_image_transform()
 
     ctsrbm_dataset = deep_fashion_ctsrbm.ConsToShopClothRetrBmkDataset(ctsrbm_dataset_dir, img_transform=backbone_image_transform, neg_img_filename_list_id="test")
 
     ctsrbm_train_idxs = ctsrbm_dataset.get_subset_indices(split="train")
     ctsrbm_val_idxs = ctsrbm_dataset.get_subset_indices(split="val")
 
+    ## Train idxs shuffle
+
     if rank == 0:
-        dataset_random_seed_mp = rd.randrange(sys.maxsize)
+
+        train_random_seed = exp_params["settings"]["stage_2"]["data_loading"].get("train_random_seed", None)
+        if train_random_seed is None: train_random_seed = rd.randrange(sys.maxsize)
+
+        exp_data["settings"]["stage_2"]["data_loading"]["train_random_seed"] = train_random_seed
+        dataset_random_seed_mp = train_random_seed  
 
     torch.distributed.barrier()
 
@@ -1041,15 +911,18 @@ def execute_stage_2_DDP(
     np.random.shuffle(ctsrbm_train_idxs)
     np.random.set_state(state)
 
+    ## General cutdown ratio
+
+    cutdown_ratio = exp_params["settings"]["data_loading"].get("cutdown_ratio", 1)
+    if cutdown_ratio != 1:
+        ctsrbm_train_idxs = src.utils.list.cutdown_list(ctsrbm_train_idxs, cutdown_ratio)
+        ctsrbm_val_idxs = src.utils.list.cutdown_list(ctsrbm_val_idxs, cutdown_ratio)
+
+
     # Validation dataloader initialization
 
     batch_size = exp_params["settings"]["stage_2"]["data_loading"]["batch_size"]
     num_workers = exp_params["settings"]["stage_2"]["data_loading"]["num_workers"]
-
-    if cutdown_ratio != 1:
-
-        ctsrbm_val_idxs = utils.list.cutdown_list(ctsrbm_val_idxs, cutdown_ratio)
-        logger.print("  [Rank {:d}] Reduced size of val split to {:.2f}%".format(rank, cutdown_ratio * 100))
 
     ctsrbm_val_dataset = Subset(ctsrbm_dataset, ctsrbm_val_idxs)
 
@@ -1062,84 +935,22 @@ def execute_stage_2_DDP(
         sampler=DistributedSampler(ctsrbm_val_dataset)
     )
 
-    # Load or initialize components
 
-    backbone = create_backbone(exp_params["settings"]["backbone"])
-    backbone = backbone.to(device)
+    # Other settings
 
-    ret_head = create_ret_head(backbone)
-    ret_head = ret_head.to(device)
+    with_tqdm = (not command_args.no_tqdm) and (rank == 0)
 
-    optimizer_params = chain(
-        backbone.parameters(),
-        ret_head.parameters()
-    )
-
-    optimizer = create_optimizer(
-        optimizer_params,
-        exp_params["settings"]["stage_2"]["optimizer"],
-        len(exp_params["settings"]["device_idxs"])
-        )
-
-    scheduler = create_scheduler(
-        optimizer,
-        exp_params["settings"]["stage_2"]["scheduler"]
-        )
-
-    early_stopper = create_early_stopper(exp_params["settings"]["stage_2"]["early_stopper"])
-    best_tracker = create_best_tracker()
-
-    grad_scaler = None
-
-    if exp_params["settings"]["stage_2"]["autocast"]["enabled"]:
-        grad_scaler = torch.cuda.amp.GradScaler()
-
-    num_epochs = exp_data["results"]["stage_2"]["num_epochs"]
-
-    if num_epochs == 0:
-
-        best_stage_1_experiment_checkpoint_filename = os.path.join(
-            experiment_dirname, "train_ret_DDP_preview__best_stage_1_ckp.pth"
-        )
-
-        experiment_checkpoint = torch.load(best_stage_1_experiment_checkpoint_filename)
-
-        backbone.load_state_dict(experiment_checkpoint["backbone_state_dict"])
-        ret_head.load_state_dict(experiment_checkpoint["ret_head_state_dict"])
-
-    else:
-
-        last_stage_2_experiment_checkpoint_filename = os.path.join(
-            experiment_dirname, "train_ret_DDP_preview__last_stage_2_ckp.pth"
-        )
-
-        experiment_checkpoint = torch.load(last_stage_2_experiment_checkpoint_filename)
-
-        backbone.load_state_dict(experiment_checkpoint["backbone_state_dict"])
-        ret_head.load_state_dict(experiment_checkpoint["ret_head_state_dict"])
-        optimizer.load_state_dict(experiment_checkpoint["optimizer_state_dict"])
-        scheduler.load_state_dict(experiment_checkpoint["scheduler_state_dict"])
-        early_stopper.load_state_dict(experiment_checkpoint["early_stopper_state_dict"])
-        best_tracker.load_state_dict(experiment_checkpoint["best_tracker_state_dict"])
-        if exp_params["settings"]["stage_1"]["autocast"]["enabled"]:
-            grad_scaler.load_state_dict(experiment_checkpoint["grad_scaler_state_dict"])
-
-    ret_model = models.BackboneAndHead(backbone, ret_head).to(device)
-    ret_model = DDP(ret_model, device_ids=[rank], broadcast_buffers=False)
-
-    # General settings
-
-    with_tqdm = not command_args.no_tqdm and not command_args.terminal_silent
-
-    grad_acc_iters = utils.dict.chain_get(
+    grad_acc_iters = src.utils.dict.chain_get(
         exp_params,
         "settings", "stage_2", "data_loading", "grad_acc_iters",
         default=1
     )  
 
+
     # Training loop
 
-    logger.print("  [Rank {:d}] Training Loop Begin".format(rank))
+    if rank == 0:
+        logger.print("  [Rank {:d}] Training Loop Begin".format(rank))
 
     num_epochs = exp_data["results"]["stage_2"]["num_epochs"]
     max_epochs = exp_params["settings"]["stage_2"]["max_epochs"]   
@@ -1155,38 +966,33 @@ def execute_stage_2_DDP(
 
         num_epochs += 1
 
-        logger.print("  [Rank {:d}] Entering epoch {:d}".format(
-            rank,
-            num_epochs
-        ))
+        if rank == 0:
+            logger.print("  [Rank {:d}] Entering epoch {:d}".format(
+                rank,
+                num_epochs
+            ))
 
         ## Train dataloader initialization
 
-        cutdown_ctsrbm_train_idxs = ctsrbm_train_idxs
-
-        if cutdown_ratio != 1:
-
-                cutdown_ctsrbm_train_idxs = utils.list.cutdown_list(cutdown_ctsrbm_train_idxs, cutdown_ratio)
-                logger.print("  [Rank {:d}] Reduced size of train split to {:.2f}%".format(rank, cutdown_ratio * 100))
+        ctsrbm_train_dataset = Subset(ctsrbm_dataset, ctsrbm_train_idxs)
 
         """
         if exp_params["settings"]["stage_2"]["data_gradual_inc"]["enabled"]:
 
-            cutdown_ratio = compute_gradual_inc_cutdown_ratio(
+            dgi_ratio = src.utils.dgi.compute_dgi_ratio(
                 num_epochs,
                 exp_params["settings"]["stage_2"]["data_gradual_inc"]["num_epochs"],
                 exp_params["settings"]["stage_2"]["data_gradual_inc"]["init_perc"] / 100
                 )
 
-            if cutdown_ratio != 1:
+            if dgi_ratio != 1:
 
-                cutdown_ctsrbm_train_idxs = utils.list.cutdown_list(cutdown_ctsrbm_train_idxs, cutdown_ratio)
-                
-                logger.print("  [Rank {:d}] Reduced size of train split to {:.2f}%".format(rank, cutdown_ratio * 100))
+                ctsrbm_train_dataset = Subset(ctsrbm_dataset, src.utils.list.cutdown_list(ctsrbm_train_idxs, dgi_ratio))
+
+                if rank == 0:
+                    logger.print("  [Rank {:d}] Reduced size of train split to {:2.2f}%".format(rank, dgi_ratio * 100))
         """
-                
-        ctsrbm_train_dataset = Subset(ctsrbm_dataset, cutdown_ctsrbm_train_idxs)
-
+                    
         ctsrbm_train_loader = DataLoader(
             ctsrbm_train_dataset,
             batch_size=batch_size,
@@ -1197,6 +1003,9 @@ def execute_stage_2_DDP(
         )
 
         ## Training
+
+        if rank == 0:
+            logger.print("    [Rank {:d}] Training...".format(rank))
 
         start_time = time()
 
@@ -1217,17 +1026,26 @@ def execute_stage_2_DDP(
         train_epoch_time = end_time - start_time
         train_mean_loss = train_loss / len(ctsrbm_train_loader)
 
-        logger.print("  [Rank {:d}] Train epoch time: {:s}".format(
+        torch.distributed.barrier()
+
+        logger.print("    [Rank {:d}] Train epoch time: {:s}".format(
             rank,
-            utils.time.sprint_fancy_time_diff(train_epoch_time)
+            src.utils.time.sprint_fancy_time_diff(train_epoch_time)
         ))
 
-        logger.print("  [Rank {:d}] Train mean loss:  {:.2e}".format(
+        torch.distributed.barrier()
+
+        logger.print("    [Rank {:d}] Train mean loss:  {:.2e}".format(
             rank,
             train_mean_loss
         ))
 
+        torch.distributed.barrier()
+
         ## Validation
+
+        if rank == 0:
+            logger.print("    [Rank {:d}] Validation...".format(rank))
 
         start_time = time()
 
@@ -1245,24 +1063,28 @@ def execute_stage_2_DDP(
         val_epoch_time = end_time - start_time
         val_mean_loss = val_loss / len(ctsrbm_val_loader)
 
-        logger.print("  [Rank {:d}] Val epoch time:   {:s}".format(
+        torch.distributed.barrier()
+
+        logger.print("    [Rank {:d}] Val epoch time:   {:s}".format(
             rank,
-            utils.time.sprint_fancy_time_diff(train_epoch_time)
+            src.utils.time.sprint_fancy_time_diff(train_epoch_time)
         ))
 
-        logger.print("  [Rank {:d}] Val mean loss:    {:.2e}".format(
+        torch.distributed.barrier()
+
+        logger.print("    [Rank {:d}] Val mean loss:    {:.2e}".format(
             rank,
             train_mean_loss
         ))
+
+        torch.distributed.barrier()
+
+        ## Scheduler update
 
         if rank == 0:
             exp_data["settings"]["stage_2"]["learning_rate_list"].append(scheduler.get_last_lr()[0])
 
         scheduler.step()
-
-        if rank == 0:
-            logger.print("  [Rank {:d}] Current memory usage:".format(rank))
-            logger.print(utils.mem.sprint_memory_usage(exp_params["settings"]["device_idxs"], num_spaces=4))
 
         ## Track results
 
@@ -1280,6 +1102,12 @@ def execute_stage_2_DDP(
 
             exp_data["results"]["stage_2"]["train_mean_loss_list"].append(list(train_mean_loss_list_mp))
             exp_data["results"]["stage_2"]["val_mean_loss_list"].append(list(val_mean_loss_list_mp))
+
+        ## Memory profiling
+
+        if rank == 0:
+            logger.print("    [Rank {:d}] Current memory usage:".format(rank))
+            logger.print(src.utils.memory.sprint_memory_usage(exp_params["settings"]["device_idxs"], num_spaces=6))
 
         ## Time calculations
 
@@ -1309,7 +1137,7 @@ def execute_stage_2_DDP(
             if exp_params["settings"]["stage_2"]["data_gradual_inc"]["enabled"]:
                 train_num_epochs = 0
                 for epoch_num in range(1, max_epochs+1):
-                    train_num_epochs += compute_gradual_inc_cutdown_ratio(
+                    train_num_epochs += src.utils.dgi.compute_dgi_ratio(
                         epoch_num,
                         exp_params["settings"]["stage_2"]["data_gradual_inc"]["num_epochs"],
                         exp_params["settings"]["stage_2"]["data_gradual_inc"]["init_perc"] / 100
@@ -1321,16 +1149,16 @@ def execute_stage_2_DDP(
             full_val_time = full_val_epoch_time * max_epochs
             full_time = full_train_time + full_val_time
 
-            gpu_mem_b = utils.mem.list_gpu_usage(exp_params["settings"]["device_idxs"])[0]["device_usage"]
+            gpu_mem_b = src.utils.memory.list_gpu_usage(exp_params["settings"]["device_idxs"])[0]["device_usage"]
 
-            logger.print("Stage 2 Preview", "train_epoch_time", train_epoch_time, utils.time.sprint_fancy_time_diff(train_epoch_time))
-            logger.print("Stage 2 Preview", "val_epoch_time", val_epoch_time, utils.time.sprint_fancy_time_diff(val_epoch_time))
-            logger.print("Stage 2 Preview", "full_train_epoch_time", full_train_epoch_time, utils.time.sprint_fancy_time_diff(full_train_epoch_time))
-            logger.print("Stage 2 Preview", "full_val_epoch_time", full_val_epoch_time, utils.time.sprint_fancy_time_diff(full_val_epoch_time))
-            logger.print("Stage 2 Preview", "full_train_time", full_train_time, utils.time.sprint_fancy_time_diff(full_train_time))
-            logger.print("Stage 2 Preview", "full_val_time", full_val_time, utils.time.sprint_fancy_time_diff(full_val_time))
-            logger.print("Stage 2 Preview", "full_time", full_time, utils.time.sprint_fancy_time_diff(full_time))
-            logger.print("Stage 2 Preview", "gpu_mem_b", gpu_mem_b, utils.mem.sprint_fancy_num_bytes(gpu_mem_b))
+            logger.print("Stage 2 Preview", "train_epoch_time", train_epoch_time, src.utils.time.sprint_fancy_time_diff(train_epoch_time))
+            logger.print("Stage 2 Preview", "val_epoch_time", val_epoch_time, src.utils.time.sprint_fancy_time_diff(val_epoch_time))
+            logger.print("Stage 2 Preview", "full_train_epoch_time", full_train_epoch_time, src.utils.time.sprint_fancy_time_diff(full_train_epoch_time))
+            logger.print("Stage 2 Preview", "full_val_epoch_time", full_val_epoch_time, src.utils.time.sprint_fancy_time_diff(full_val_epoch_time))
+            logger.print("Stage 2 Preview", "full_train_time", full_train_time, src.utils.time.sprint_fancy_time_diff(full_train_time))
+            logger.print("Stage 2 Preview", "full_val_time", full_val_time, src.utils.time.sprint_fancy_time_diff(full_val_time))
+            logger.print("Stage 2 Preview", "full_time", full_time, src.utils.time.sprint_fancy_time_diff(full_time))
+            logger.print("Stage 2 Preview", "gpu_mem_b", gpu_mem_b, src.utils.memory.sprint_fancy_num_bytes(gpu_mem_b))
 
         ## Training conditions and checkpoints
 
@@ -1352,33 +1180,38 @@ def execute_stage_2_DDP(
 
             ## Checkpoint saving
 
-            with utils.sig.DelayedInterrupt():
+            with src.utils.signal.DelayedInterrupt():
+
+                experiment_checkpoint = {}
+
+                experiment_checkpoint["backbone_state_dict"] = backbone.state_dict()
+                experiment_checkpoint["ret_head_state_dict"] = ret_head.state_dict()
+                experiment_checkpoint["optimizer_state_dict"] = optimizer.state_dict()
+                experiment_checkpoint["scheduler_state_dict"] = scheduler.state_dict()
+                experiment_checkpoint["early_stopper_state_dict"] = early_stopper.state_dict()
+                experiment_checkpoint["best_tracker_state_dict"] = best_tracker.state_dict()
+                if grad_scaler is not None:
+                    experiment_checkpoint["grad_scaler_state_dict"] = grad_scaler.state_dict()
 
                 ## Save best component checkpoint
 
                 if best_tracker.is_best(sum(train_mean_loss_list_mp)):
 
                     best_stage_2_experiment_checkpoint_filename = os.path.join(
-                        experiment_dirname, "train_ret_DDP_preview__best_stage_2_ckp.pth"
+                        experiment_dirname, "train_ret_DDP_preview_stage_2__best_ckp.pth"
                     )
 
-                    logger.print("  [Rank {:d}] Saving currently best model to \"{:s}\"".format(
+                    logger.print("    [Rank {:d}] Saving currently best model to \"{:s}\"".format(
                         rank,
                         best_stage_2_experiment_checkpoint_filename
                     ))
 
-                    save_experiment_checkpoint(
-                        best_stage_2_experiment_checkpoint_filename,
-                        backbone,
-                        ret_head,
-                        optimizer,
-                        scheduler,
-                        early_stopper,
-                        best_tracker,
-                        grad_scaler
-                        )
+                    torch.save(
+                        experiment_checkpoint,
+                        best_stage_2_experiment_checkpoint_filename
+                    )
 
-                    logger.print("  [Rank {:d}] Saved currently best model to \"{:s}\"".format(
+                    logger.print("    [Rank {:d}] Saved currently best model to \"{:s}\"".format(
                         rank,
                         best_stage_2_experiment_checkpoint_filename
                     ))
@@ -1392,16 +1225,16 @@ def execute_stage_2_DDP(
                     experiment_dirname, "train_ret_DDP_preview__data.json"
                 )
 
-                logger.print("  [Rank {:d}] Saving experiment data to \"{:s}\"".format(
+                logger.print("    [Rank {:d}] Saving experiment data to \"{:s}\"".format(
                     rank,
                     exp_data_filename
                 ))
 
-                save_json_dict(
+                src.utils.json.save_json_dict(
                     exp_data_filename, exp_data
                 )
 
-                logger.print("  [Rank {:d}] Saved experiment data to \"{:s}\"".format(
+                logger.print("    [Rank {:d}] Saved experiment data to \"{:s}\"".format(
                     rank,
                     exp_data_filename
                 ))
@@ -1409,33 +1242,29 @@ def execute_stage_2_DDP(
                 ## Save last component checkpoint
                 
                 last_stage_2_experiment_checkpoint_filename = os.path.join(
-                    experiment_dirname, "train_ret_DDP_preview__last_stage_2_ckp.pth"
+                    experiment_dirname, "train_ret_DDP_preview_stage_2__last_ckp.pth"
                 )
 
-                logger.print("  [Rank {:d}] Saving last epoch model to \"{:s}\"".format(
+                logger.print("    [Rank {:d}] Saving last epoch model to \"{:s}\"".format(
                     rank,
                     last_stage_2_experiment_checkpoint_filename
                 ))
 
-                save_experiment_checkpoint(
-                    last_stage_2_experiment_checkpoint_filename,
-                    backbone,
-                    ret_head,
-                    optimizer,
-                    scheduler,
-                    early_stopper,
-                    best_tracker,
-                    grad_scaler
+                torch.save(
+                    experiment_checkpoint,
+                    last_stage_2_experiment_checkpoint_filename
                 )
 
-                logger.print("  [Rank {:d}] Saved last epoch model to \"{:s}\"".format(
+                logger.print("    [Rank {:d}] Saved last epoch model to \"{:s}\"".format(
                     rank,
                     last_stage_2_experiment_checkpoint_filename
                 ))
 
         torch.distributed.barrier()
 
-    logger.print("  [Rank {:d}] Training Loop End".format(rank))
+    if rank == 0:
+        logger.print("  [Rank {:d}] Training Loop End".format(rank))
+
 
     # PyTorch DDP stuff
 
@@ -1453,6 +1282,7 @@ def execute_test_DDP(
     finished_mp
 ):
 
+
     # Prepare logger
 
     experiment_name = exp_params["experiment_name"]
@@ -1464,7 +1294,10 @@ def execute_test_DDP(
     logger_streams = [log_full_filename]
     if not command_args.terminal_silent: logger_streams.append(sys.stdout)
 
-    logger = utils.log.Logger(logger_streams)
+    logger = src.utils.log.Logger(logger_streams)
+
+    sys.stderr = logger
+
 
     # PyTorch DDP stuff
 
@@ -1475,26 +1308,51 @@ def execute_test_DDP(
 
     device = torch.device(rank)
     
+
+    # Load or initialize components
+
+    backbone = src.utils.comps.create_backbone(exp_params["settings"]["backbone"])
+    backbone = backbone.to(device)
+
+    ret_head = src.utils.comps.create_ret_head(
+        backbone,
+        exp_params["settings"]["ret_head"]
+    )
+    ret_head = ret_head.to(device)
+
+    last_stage_2_experiment_checkpoint_filename = os.path.join(
+        experiment_dirname, "train_ret_DDP_preview_stage_2__best_ckp.pth"
+    )
+
+    experiment_checkpoint = torch.load(last_stage_2_experiment_checkpoint_filename)
+
+    backbone.load_state_dict(experiment_checkpoint["backbone_state_dict"])
+    ret_head.load_state_dict(experiment_checkpoint["ret_head_state_dict"])
+        
+    ret_model = torch.nn.Sequential(backbone, ret_head).to(device)
+    ret_model = DDP(ret_model, device_ids=[rank], broadcast_buffers=False)
+
+
     # Dataset initialization
 
-    backbone_image_transform = get_backbone_image_transform(exp_params["settings"]["backbone"]["class"])
-    backbone_image_transform.antialias = True
-
     ctsrbm_dataset_dir = os.path.join(pathlib.Path.home(), "data", "DeepFashion", "Consumer-to-shop Clothes Retrieval Benchmark")
+    backbone_image_transform = backbone.get_image_transform()
 
     ctsrbm_dataset = deep_fashion_ctsrbm.ConsToShopClothRetrBmkDataset(ctsrbm_dataset_dir, img_transform=backbone_image_transform, neg_img_filename_list_id="test")
 
     ctsrbm_test_idxs = ctsrbm_dataset.get_subset_indices(split="test")
+
+    ## General cutdown ratio
+
+    cutdown_ratio = exp_params["settings"]["data_loading"].get("cutdown_ratio", 1)
+    if cutdown_ratio != 1:
+        ctsrbm_test_idxs = src.utils.list.cutdown_list(ctsrbm_test_idxs, cutdown_ratio)
     
-    # Dataloader initialization
+
+    # Test dataloader initialization
 
     batch_size = exp_params["settings"]["test"]["data_loading"]["batch_size"]
     num_workers = exp_params["settings"]["test"]["data_loading"]["num_workers"]
-
-    if cutdown_ratio != 1:
-
-        ctsrbm_test_idxs = utils.list.cutdown_list(ctsrbm_test_idxs, cutdown_ratio)
-        logger.print("  [Rank {:d}] Reduced size of test split to {:.2f}%".format(rank, cutdown_ratio * 100))
 
     ctsrbm_test_dataset = Subset(ctsrbm_dataset, ctsrbm_test_idxs)
 
@@ -1507,33 +1365,16 @@ def execute_test_DDP(
         sampler=DistributedSampler(ctsrbm_test_dataset)
     )
 
-    # Load or initialize components
 
-    backbone = create_backbone(exp_params["settings"]["backbone"])
-    backbone = backbone.to(device)
+    # Other settings
 
-    ret_head = create_ret_head(backbone)
-    ret_head = ret_head.to(device)
+    with_tqdm = (not command_args.no_tqdm) and (rank == 0)
 
-    last_stage_2_experiment_checkpoint_filename = os.path.join(
-        experiment_dirname, "train_ret_DDP_preview__last_stage_2_ckp.pth"
-    )
-
-    experiment_checkpoint = torch.load(last_stage_2_experiment_checkpoint_filename)
-
-    backbone.load_state_dict(experiment_checkpoint["backbone_state_dict"])
-    ret_head.load_state_dict(experiment_checkpoint["ret_head_state_dict"])
-        
-    ret_model = models.BackboneAndHead(backbone, ret_head).to(device)
-    ret_model = DDP(ret_model, device_ids=[rank], broadcast_buffers=False)
-
-    ## General settings
-
-    with_tqdm = not command_args.no_tqdm and not command_args.terminal_silent
 
     # Testing
 
-    logger.print("  [Rank {:d}] Testing Begin".format(rank))
+    if rank == 0:
+        logger.print("  [Rank {:d}] Testing Begin".format(rank))
 
     if rank == 0:    
         finished_mp.value = exp_data["results"]["test"]["finished"]
@@ -1543,6 +1384,9 @@ def execute_test_DDP(
     if not finished_mp.value:
 
         ## Test epoch
+
+        if rank == 0:
+            logger.print("    [Rank {:d}] Testing...".format(rank))
 
         start_time = time()
 
@@ -1560,22 +1404,28 @@ def execute_test_DDP(
         test_epoch_time = end_time - start_time
         test_mean_loss = test_loss / len(ctsrbm_test_dataset)
 
+        torch.distributed.barrier()
+
         logger.print("  [Rank {:d}] Test epoch time:  {:s}".format(
             rank,
-            utils.time.sprint_fancy_time_diff(test_epoch_time)
+            src.utils.time.sprint_fancy_time_diff(test_epoch_time)
         ))
+
+        torch.distributed.barrier()
 
         logger.print("  [Rank {:d}] Test mean loss:   {:.2e}".format(
             rank,
             test_mean_loss
         ))
 
-        if rank == 0:
-            logger.print("  [Rank {:d}] Current memory usage:".format(rank))
-            logger.print(utils.mem.sprint_memory_usage(exp_params["settings"]["device_idxs"], num_spaces=4))
-        
+        torch.distributed.barrier()
+
         ## Track results
 
+        if rank == 0:
+            logger.print("  [Rank {:d}] Current memory usage:".format(rank))
+            logger.print(src.utils.memory.sprint_memory_usage(exp_params["settings"]["device_idxs"], num_spaces=4))
+        
         test_epoch_time_list_mp[rank] = test_epoch_time
         test_mean_loss_list_mp[rank] = test_mean_loss
 
@@ -1603,12 +1453,12 @@ def execute_test_DDP(
             full_test_epoch_time = test_epoch_time / cutdown_ratio
             full_test_time = full_test_epoch_time
 
-            gpu_mem_b = utils.mem.list_gpu_usage(exp_params["settings"]["device_idxs"])[0]["device_usage"]
+            gpu_mem_b = src.utils.memory.list_gpu_usage(exp_params["settings"]["device_idxs"])[0]["device_usage"]
 
-            logger.print("Test Preview", "test_epoch_time", test_epoch_time, utils.time.sprint_fancy_time_diff(test_epoch_time))
-            logger.print("Test Preview", "full_test_epoch_time", full_test_epoch_time, utils.time.sprint_fancy_time_diff(full_test_epoch_time))
-            logger.print("Test Preview", "full_test_time", full_test_time, utils.time.sprint_fancy_time_diff(full_test_time))
-            logger.print("Test Preview", "gpu_mem_b", gpu_mem_b, utils.mem.sprint_fancy_num_bytes(gpu_mem_b))
+            logger.print("Test Preview", "test_epoch_time", test_epoch_time, src.utils.time.sprint_fancy_time_diff(test_epoch_time))
+            logger.print("Test Preview", "full_test_epoch_time", full_test_epoch_time, src.utils.time.sprint_fancy_time_diff(full_test_epoch_time))
+            logger.print("Test Preview", "full_test_time", full_test_time, src.utils.time.sprint_fancy_time_diff(full_test_time))
+            logger.print("Test Preview", "gpu_mem_b", gpu_mem_b, src.utils.memory.sprint_fancy_num_bytes(gpu_mem_b))
 
         ## Training conditions and checkpoints
 
@@ -1618,7 +1468,7 @@ def execute_test_DDP(
 
             ## Checkpoint saving
 
-            with utils.sig.DelayedInterrupt():
+            with src.utils.signal.DelayedInterrupt():
 
                 ## Save experiment data
 
@@ -1633,7 +1483,7 @@ def execute_test_DDP(
                     exp_data_filename
                 ))
 
-                save_json_dict(
+                src.utils.json.save_json_dict(
                     exp_data_filename, exp_data
                 )
 
@@ -1642,7 +1492,9 @@ def execute_test_DDP(
                     exp_data_filename
                 ))
 
-    logger.print("  [Rank {:d}] Testing End".format(rank))
+    if rank == 0:
+        logger.print("  [Rank {:d}] Testing End".format(rank))
+
 
     # PyTorch DDP stuff
 
@@ -1712,15 +1564,30 @@ if __name__ == "__main__":
     experiment_name = exp_params["experiment_name"]
     experiment_dirname = os.path.join(pathlib.Path.home(), "data", "fashion_retrieval", experiment_name)
 
-    log_filename = "train_ret_DDP__logs.txt"
+    log_filename = "train_ret_DDP_preview__logs.txt"
     log_full_filename = os.path.join(experiment_dirname, log_filename)
 
     logger_streams = [log_full_filename]
     if not command_args.terminal_silent: logger_streams.append(sys.stdout)
 
-    logger = utils.log.Logger(logger_streams)
+    logger = src.utils.log.Logger(logger_streams)
+
+    sys.stderr = logger
     
     logger.print("Bash command:", " ".join(sys.argv))
+
+
+    ####
+    # GPU INITIALIZATION
+    ####
+
+
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+
+    device_idxs = exp_params["settings"]["device_idxs"]
+    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join([str(idx) for idx in device_idxs])
+
+    torch.cuda.empty_cache()
 
 
     ####
@@ -1753,11 +1620,15 @@ if __name__ == "__main__":
 
         exp_data["settings"]["command_args"] = vars(command_args)
 
+        exp_data["settings"]["gpu_usage"] = src.utils.memory.list_gpu_data(device_idxs)
+        exp_data["settings"]["hostname"] = socket.gethostname()
+        exp_data["settings"]["master_port"] = command_args.master_port
+
         exp_data_filename = os.path.join(
             experiment_dirname, "train_ret_DDP_preview__data.json"
         )
         
-        save_json_dict(exp_data_filename, exp_data)
+        src.utils.json.save_json_dict(exp_data_filename, exp_data)
 
         logger.print("Starting run at {:s}".format(datetime_now_str))
 
@@ -1765,24 +1636,7 @@ if __name__ == "__main__":
 
         logger.print("Resuming run at {:s}".format(datetime_now_str))
     
-    exp_data = load_json_dict(exp_data_filename)
-
-
-    ####
-    # GPU INITIALIZATION
-    ####
-
-
-    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-
-    device_idxs = exp_params["settings"]["device_idxs"]
-    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join([str(idx) for idx in device_idxs])
-
-    torch.cuda.empty_cache()
-
-    exp_data["settings"]["gpu_usage"] = utils.mem.list_gpu_data(device_idxs)
-    exp_data["settings"]["hostname"] = socket.gethostname()
-    exp_data["settings"]["master_port"] = command_args.master_port
+    exp_data = src.utils.json.load_json_dict(exp_data_filename)
 
 
     ####
@@ -1792,8 +1646,32 @@ if __name__ == "__main__":
 
     # Initialize experiment data
 
-    if utils.dict.chain_get(exp_data, "settings", "stage_1") is None:
-        exp_data = initialize_stage_1_exp_data(exp_data, exp_params)
+    if src.utils.dict.chain_get(exp_data, "settings", "stage_1") is None:
+
+        ## Settings
+
+        exp_data["settings"]["stage_1"] = {}
+        exp_data["settings"]["stage_1"].update(exp_params["settings"]["stage_1"])
+        
+        stage_description = "Train with frozen backbone"
+        exp_data["settings"]["stage_1"]["description"] = stage_description
+
+        exp_data["settings"]["stage_1"]["learning_rate_list"] = []
+
+        ## Results
+
+        exp_data["results"]["stage_1"] = {}
+
+        exp_data["results"]["stage_1"]["train_epoch_time_list"] = []
+        exp_data["results"]["stage_1"]["val_epoch_time_list"] = []
+
+        exp_data["results"]["stage_1"]["train_mean_loss_list"] = []
+        exp_data["results"]["stage_1"]["val_mean_loss_list"] = []
+
+        exp_data["results"]["stage_1"]["num_epochs"] = 0
+        exp_data["results"]["stage_1"]["finished"] = False
+        
+        src.utils.json.save_json_dict(exp_data_filename, exp_data)
 
     # Check if stage is finished
 
@@ -1832,7 +1710,7 @@ if __name__ == "__main__":
 
     # Reload experiment data
 
-    exp_data = load_json_dict(exp_data_filename)
+    exp_data = src.utils.json.load_json_dict(exp_data_filename)
 
 
     ####
@@ -1842,8 +1720,32 @@ if __name__ == "__main__":
 
     # Initialize experiment data
 
-    if utils.dict.chain_get(exp_data, "settings", "stage_2") is None:
-        exp_data = initialize_stage_2_exp_data(exp_data, exp_params)
+    if src.utils.dict.chain_get(exp_data, "settings", "stage_2") is None:
+
+        ## Settings
+
+        exp_data["settings"]["stage_2"] = {}
+        exp_data["settings"]["stage_2"].update(exp_params["settings"]["stage_2"])
+
+        stage_description = "Train entire model"
+        exp_data["settings"]["stage_2"]["description"] = stage_description
+            
+        exp_data["settings"]["stage_2"]["learning_rate_list"] = []
+        
+        ## Results
+
+        exp_data["results"]["stage_2"] = {}
+
+        exp_data["results"]["stage_2"]["train_epoch_time_list"] = []
+        exp_data["results"]["stage_2"]["val_epoch_time_list"] = []
+
+        exp_data["results"]["stage_2"]["train_mean_loss_list"] = []
+        exp_data["results"]["stage_2"]["val_mean_loss_list"] = []
+
+        exp_data["results"]["stage_2"]["num_epochs"] = 0
+        exp_data["results"]["stage_2"]["finished"] = False
+        
+        src.utils.json.save_json_dict(exp_data_filename, exp_data)
 
     # Check if stage is finished
 
@@ -1882,7 +1784,7 @@ if __name__ == "__main__":
 
     # Reload experiment data
 
-    exp_data = load_json_dict(exp_data_filename)
+    exp_data = src.utils.json.load_json_dict(exp_data_filename)
 
 
     ####
@@ -1892,9 +1794,24 @@ if __name__ == "__main__":
 
     # Initialize experiment data
 
-    if utils.dict.chain_get(exp_data, "settings", "test") is None:
-        exp_data = initialize_test_exp_data(exp_data, exp_params)
+    if src.utils.dict.chain_get(exp_data, "settings", "test") is None:
 
+        ## Settings
+
+        exp_data["settings"]["test"] = {}
+        exp_data["settings"]["test"].update(exp_params["settings"]["test"])
+        
+        stage_description = "Test final model performance"
+        exp_data["settings"]["test"]["description"] = stage_description
+        
+        ## Results
+
+        exp_data["results"]["test"] = {}
+
+        exp_data["results"]["test"]["finished"] = False
+        
+        src.utils.json.save_json_dict(exp_data_filename, exp_data)
+    
     # Check if stage is finished
 
     finished = exp_data["results"]["test"]["finished"]

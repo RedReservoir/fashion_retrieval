@@ -1,0 +1,62 @@
+{
+    "experiment_name": "ret_train_old_smpl/convnext_v2_t_s1/head_008_exp_008",
+    "settings": {
+        "device_idxs": [
+            2,
+            4,
+            5,
+            6
+        ],
+        "backbone": {
+            "class": "ConvNeXtV2TinyMultilevelBackbone",
+            "img_size": 224
+        },
+        "head": {
+            "class": "RetrievalHeadPyramidTopDownProgressiveSimple",
+            "in_feat_idxs": [
+                0,
+                1,
+                2,
+                3
+            ],
+            "emb_sizes": [
+                512,
+                768,
+                1024
+            ]
+        },
+        "stage_1": {
+            "max_epochs": 5,
+            "eval_epoch_0": false,
+            "optimizer": {
+                "class": "SGD",
+                "lr": 5.62e-05,
+                "momentum": 0.9
+            },
+            "scheduler": {
+                "class": "ExponentialLR",
+                "gamma": 0.95
+            },
+            "early_stopper": {
+                "patience": 5,
+                "min_delta": 0
+            },
+            "data_loading": {
+                "batch_size": 32,
+                "num_workers": 4,
+                "grad_acc_iters": 1
+            },
+            "autocast": {
+                "enabled": false
+            },
+            "data_gradual_inc": {
+                "enabled": false
+            },
+            "ctsrbm_dataset": {
+                "neg_img_filename_list_id": "test_old",
+                "train_random_seed": 42,
+                "cutdown_ratio": 1
+            }
+        }
+    }
+}

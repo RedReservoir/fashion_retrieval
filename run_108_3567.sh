@@ -1,0 +1,7 @@
+python train_ret_DDP_s2_NEW.py \
+params/ret_train_more_trf/gcvit_t_s2/test_adam_bs_004_lr_000_g_000__train_ret_DDP_s2.json \
+--master_port 12355 --resume_experiment --terminal_silent
+
+python eval_ctsrbm_metrics_2.py \
+params/ret_train_more_trf/gcvit_t_s2/test_adam_bs_004_lr_000_g_000__eval_ctsrbm_metrics_2.json \
+params/ret_train_more_trf/gcvit_t_s2/test_adam_bs_004_lr_000_g_000__train_ret_DDP_s2.json

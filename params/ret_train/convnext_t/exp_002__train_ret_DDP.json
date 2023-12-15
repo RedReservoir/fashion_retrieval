@@ -2,13 +2,16 @@
     "experiment_name": "ret_train/convnext_t/test_002",
     "settings": {
       "device_idxs": [
-        0,
-        1,
         2,
-        3
+        4,
+        5,
+        6
       ],
       "backbone": {
         "class": "ConvNeXtTinyBackbone"
+      },
+      "ret_head": {
+          "emb_size": 1024
       },
       "stage_1": {
         "max_epochs": 30,

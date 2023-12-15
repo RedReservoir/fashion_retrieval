@@ -1,0 +1,50 @@
+{
+    "experiment_name": "ret_train_glam_final/convnext_t_s1/glam_002_exp_000",
+    "settings": {
+        "device_idxs": [5, 6, 7, 8],
+        "backbone": {
+            "class": "ConvNeXtTinyPyramidBackbone",
+            "img_size": 224
+        },
+        "head": {
+            "class": "RetrievalGLAMHeadPyramidTopDownInstantSimple",
+            "in_feat_idxs": [0, 1, 2, 3],
+            "emb_size": 1440,
+            "glam_int_channels_list": [24, 48, 96, 96],
+            "conv1_groups": 2
+        },
+        "stage_1": {
+            "max_epochs": 10,
+            "eval_epoch_0": false,
+            "optimizer": {
+                "class": "SGD",
+                "lr": 1.00e-4,
+                "momentum": 0.9
+            },
+            "scheduler": {
+                "class": "ExponentialLR",
+                "gamma": 0.80
+            },
+            "early_stopper": {
+                "patience": 5,
+                "min_delta": 1e-10
+            },
+            "data_loading": {
+                "batch_size": 16,
+                "num_workers": 4,
+                "grad_acc_iters": 2
+            },
+            "autocast": {
+                "enabled": false
+            },
+            "data_gradual_inc": {
+                "enabled": false
+            },
+            "ctsrbm_dataset": {
+                "neg_img_filename_list_id": "test_old",
+                "train_random_seed": 42,
+                "cutdown_ratio": 1
+            }
+        }
+    }
+}

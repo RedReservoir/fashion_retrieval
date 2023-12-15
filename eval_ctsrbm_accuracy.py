@@ -1,154 +1,37 @@
 import os
-import shutil
 import sys
 import pathlib
-import pickle as pkl
-import json
 import argparse
 
+from tqdm import tqdm
+
+from datetime import datetime
+
+import socket
+
+########
+
 import numpy as np
-import pandas as pd
 
 import torch
-import torchvision
 
 from torch.utils.data import DataLoader, Subset
 
-from datasets import deep_fashion_ctsrbm
-from arch import models, heads
-
-from tqdm import tqdm
-from fashion_retrieval.arch import backbones_cnn
-
-import utils.mem
-import utils.list
-import utils.train
-import utils.time
-import utils.log
-import utils.dict
-import utils.sig
-import utils.pkl
-import utils.chunk
-
-from time import time
-from datetime import datetime
-
-from itertools import chain
-from functools import reduce
-
-import json
-import socket
-
-
-
-def print_tensor_info(tensor, name, logger):
-
-    logger.print(
-        "{:s}:".format(name),
-        tensor.shape,
-        tensor.dtype,
-        tensor.device,
-        utils.mem.sprint_fancy_num_bytes(utils.mem.get_num_bytes(tensor))
-    )
-
-
-
-########
-# COMPONENT FUNCTIONS
 ########
 
+from src.datasets import deep_fashion_ctsrbm
 
-
-def create_backbone(backbone_class):
-
-    if backbone_class == "ResNet50Backbone":
-        backbone = backbones_cnn.ResNet50Backbone()
-    if backbone_class == "EfficientNetB3Backbone":
-        backbone = backbones_cnn.EfficientNetB3Backbone()
-    if backbone_class == "EfficientNetB4Backbone":
-        backbone = backbones_cnn.EfficientNetB4Backbone()
-    if backbone_class == "EfficientNetB5Backbone":
-        backbone = backbones_cnn.EfficientNetB5Backbone()
-    if backbone_class == "ConvNeXtTinyBackbone":
-        backbone = backbones_cnn.ConvNeXtTinyBackbone(contiguous_after_permute=True)
-
-    return backbone
-
-
-def load_experiment_checkpoint(
-        experiment_checkpoint_filename,
-        exp_params,
-        device
-        ):
-
-    # Load checkpoint
-
-    experiment_checkpoint = torch.load(experiment_checkpoint_filename)
-
-    # Backbone
-
-    backbone_class = exp_params["settings"]["backbone"]["class"]
-
-    backbone = create_backbone(backbone_class).to(device)
-
-    backbone.load_state_dict(experiment_checkpoint["backbone_state_dict"])
-
-    # Head
-
-    ret_head = heads.RetHead(backbone.out_shape, 1024).to(device)
-
-    ret_head.load_state_dict(experiment_checkpoint["ret_head_state_dict"])
-
-    return (backbone, ret_head)
-
-
-
-########
-# DATASET FUNCTIONS
-########
-
-
-
-def create_backbone_transform(backbone_class):
-
-    if backbone_class == "ResNet50Backbone":
-        backbone_image_transform = torchvision.models.ResNet50_Weights.DEFAULT.transforms()
-    if backbone_class == "EfficientNetB3Backbone":
-        backbone_image_transform = torchvision.models.EfficientNet_B3_Weights.DEFAULT.transforms()
-    if backbone_class == "EfficientNetB4Backbone":
-        backbone_image_transform = torchvision.models.EfficientNet_B4_Weights.DEFAULT.transforms()
-    if backbone_class == "EfficientNetB5Backbone":
-        backbone_image_transform = torchvision.models.EfficientNet_B5_Weights.DEFAULT.transforms()
-    if backbone_class == "ConvNeXtTinyBackbone":
-        backbone_image_transform = torchvision.models.ConvNeXt_Tiny_Weights.DEFAULT.transforms()
-
-    return backbone_image_transform
-
-
-
-########
-# JSON DATA FUNCTIONS
-########
-
-
-
-def save_json_data(
-        json_data_filename,
-        json_data
-        ):
-
-    with open(json_data_filename, 'w') as json_data_file:
-        json.dump(json_data, json_data_file, indent=2)
-
-
-def load_json_data(
-        json_data_filename
-        ):
-
-    with open(json_data_filename, 'r') as json_data_file:
-        json_data = json.load(json_data_file)
-
-    return json_data
+import src.utils.train
+import src.utils.log
+import src.utils.dict
+import src.utils.list
+import src.utils.nvgpu
+import src.utils.signal
+import src.utils.time
+import src.utils.chunk
+import src.utils.comps
+import src.utils.json
+import src.utils.dgi
 
 
 
@@ -218,7 +101,7 @@ def compute_retrieval_accuracy(
 
     # Computing metrics in chunks
 
-    cons_img_zidxs_chunk_gen = utils.chunk.chunk_partition_size(np.arange(num_cons_imgs), cons_imgs_chunk_size)
+    cons_img_zidxs_chunk_gen = src.utils.chunk.chunk_partition_size(np.arange(num_cons_imgs), cons_imgs_chunk_size)
     if with_tqdm: cons_img_zidxs_chunk_gen = tqdm(cons_img_zidxs_chunk_gen)
 
     for cons_img_zidxs_chunk in cons_img_zidxs_chunk_gen:
@@ -292,7 +175,8 @@ if __name__ == "__main__":
     eval_params_filename = os.path.join(pathlib.Path.home(), "fashion_retrieval", command_args.eval_params_filename)
     exp_params_filename = os.path.join(pathlib.Path.home(), "fashion_retrieval", command_args.exp_params_filename)
 
-    with_tqdm = not command_args.no_tqdm and not command_args.terminal_silent
+    with_tqdm = not command_args.no_tqdm
+    
 
     ####
     # EVALUATION PREREQUISITES
@@ -301,8 +185,8 @@ if __name__ == "__main__":
 
     # Read params
 
-    eval_params = load_json_data(eval_params_filename)
-    exp_params = load_json_data(exp_params_filename)
+    eval_params = src.utils.json.load_json_dict(eval_params_filename)
+    exp_params = src.utils.json.load_json_dict(exp_params_filename)
 
     # Experiment directory
 
@@ -329,7 +213,9 @@ if __name__ == "__main__":
     logger_streams = [log_full_filename]
     if not command_args.terminal_silent: logger_streams.append(sys.stdout)
 
-    logger = utils.log.Logger(logger_streams)
+    logger = src.utils.log.Logger(logger_streams)
+
+    sys.stderr = logger
     
     logger.print("Command arguments:", " ".join(sys.argv))
     
@@ -370,14 +256,48 @@ if __name__ == "__main__":
 
     torch.cuda.empty_cache()
 
-    eval_data["settings"]["gpu_usage"] = utils.mem.list_gpu_data([device_idx])
+    eval_data["settings"]["gpu_usage"] = src.utils.nvgpu.list_gpu_data([device_idx])
     eval_data["settings"]["hostname"] = socket.gethostname()
 
     logger.print("Selected CUDA devices")
 
     logger.print("Current memory usage:")
-    logger.print(utils.mem.sprint_memory_usage([eval_params["settings"]["device_idx"]], num_spaces=2))
+    logger.print(src.utils.nvgpu.sprint_memory_usage([eval_params["settings"]["device_idx"]], num_spaces=2))
 
+
+    ####
+    # MODEL INITIALIZATION
+    ####
+
+    logger.print("Loading model from checkpoint")
+
+    # Load components
+
+    backbone = src.utils.comps.create_backbone(exp_params["settings"]["backbone"])
+    backbone = backbone.to(device)
+
+    ret_head = src.utils.comps.create_head(
+        backbone,
+        exp_params["settings"]["head"]
+    )
+    ret_head = ret_head.to(device)
+
+
+    experiment_checkpoint_filename = os.path.join(
+        experiment_dirname, eval_params["settings"]["model_checkpoint"]
+    )
+
+    experiment_checkpoint = torch.load(experiment_checkpoint_filename)
+
+    backbone.load_state_dict(experiment_checkpoint["backbone_state_dict"])
+    ret_head.load_state_dict(experiment_checkpoint["ret_head_state_dict"])
+
+    # Build models
+
+    ret_model = torch.nn.Sequential(backbone, ret_head).to(device)
+
+    logger.print("Loaded model from checkpoint")
+    
 
     ####
     # DATA INITIALIZATION
@@ -388,48 +308,12 @@ if __name__ == "__main__":
 
     # Dataset initialization
 
-    backbone_class = exp_params["settings"]["backbone"]["class"]
-
-    backbone_image_transform = create_backbone_transform(backbone_class)
-    backbone_image_transform.antialias = True
-
     ctsrbm_dataset_dir = os.path.join(pathlib.Path.home(), "data", "DeepFashion", "Consumer-to-shop Clothes Retrieval Benchmark")
+    backbone_image_transform = backbone.get_image_transform()
 
     ctsrbm_dataset = deep_fashion_ctsrbm.ConsToShopClothRetrBmkImageLoader(ctsrbm_dataset_dir, img_transform=backbone_image_transform)
 
     logger.print("Initialized image loader dataset")
-
-
-    ####
-    # MODEL INITIALIZATION
-    ####
-
-
-    logger.print("Loading model from checkpoint")
-
-    # Load components
-
-    experiment_checkpoint_filename = eval_params["settings"]["model_checkpoint"]
-
-    experiment_checkpoint_filename_full = os.path.join(
-        experiment_dirname, experiment_checkpoint_filename
-    )
-
-    backbone, ret_head =\
-    load_experiment_checkpoint(
-        experiment_checkpoint_filename_full,
-        exp_params,
-        device
-    )
-
-    logger.print("Loaded model from checkpoint")
-
-
-    # Build models
-
-    ret_model = models.BackboneAndHead(backbone, ret_head).to(device)
-
-    logger.print("Loaded model from checkpoint")
 
 
     ####
@@ -492,7 +376,7 @@ if __name__ == "__main__":
 
     logger.print("  Computing retrieval accuracy")
 
-    cons_imgs_chunk_size = utils.dict.chain_get(
+    cons_imgs_chunk_size = src.utils.dict.chain_get(
         eval_params,
         "settings", "cons_imgs_chunk_size",
         default=1000
@@ -520,7 +404,7 @@ if __name__ == "__main__":
     ]
 
     logger.print("  Current memory usage:")
-    logger.print(utils.mem.sprint_memory_usage([eval_params["settings"]["device_idx"]], num_spaces=4))
+    logger.print(src.utils.nvgpu.sprint_memory_usage([eval_params["settings"]["device_idx"]], num_spaces=4))
 
     logger.print("Train split accuracy end")
 
@@ -585,7 +469,7 @@ if __name__ == "__main__":
 
     logger.print("  Computing retrieval accuracy")
 
-    cons_imgs_chunk_size = utils.dict.chain_get(
+    cons_imgs_chunk_size = src.utils.dict.chain_get(
         eval_params,
         "settings", "cons_imgs_chunk_size",
         default=1000
@@ -615,7 +499,7 @@ if __name__ == "__main__":
     ]
 
     logger.print("Current memory usage:")
-    logger.print(utils.mem.sprint_memory_usage([eval_params["settings"]["device_idx"]], num_spaces=2))
+    logger.print(src.utils.nvgpu.sprint_memory_usage([eval_params["settings"]["device_idx"]], num_spaces=2))
 
     logger.print("Validation split accuracy end")
 
@@ -680,7 +564,7 @@ if __name__ == "__main__":
 
     logger.print("  Computing retrieval accuracy")
 
-    cons_imgs_chunk_size = utils.dict.chain_get(
+    cons_imgs_chunk_size = src.utils.dict.chain_get(
         eval_params,
         "settings", "cons_imgs_chunk_size",
         default=1000
@@ -708,7 +592,7 @@ if __name__ == "__main__":
     ]
 
     logger.print("Current memory usage:")
-    logger.print(utils.mem.sprint_memory_usage([eval_params["settings"]["device_idx"]], num_spaces=2))
+    logger.print(src.utils.nvgpu.sprint_memory_usage([eval_params["settings"]["device_idx"]], num_spaces=2))
 
     logger.print("Test split accuracy end")
 
@@ -726,7 +610,10 @@ if __name__ == "__main__":
         eval_data_filename
     ))
 
-    save_json_data(eval_data_filename, eval_data)
+    src.utils.json.save_json_dict(
+        eval_data,
+        eval_data_filename
+        )
 
     logger.print("Saved results to \"{:s}\"".format(
         eval_data_filename

@@ -1,0 +1,49 @@
+{
+    "experiment_name": "ret_train_DDP_2/test",
+    "settings": {
+        "device_idxs": [0, 1, 2, 3],
+        "backbone": {
+            "class": "ConvNeXtTinyPyramidBackbone",
+            "img_size": 224
+        },
+        "head": {
+            "class": "RetrievalHeadPyramidBottomUpProgressiveConv",
+            "in_feat_idxs": [0, 1, 2, 3],
+            "emb_sizes": [512, 768, 1024],
+            "conv_par_perc": 0
+        },
+        "stage_1": {
+            "max_epochs": 30,
+            "eval_epoch_0": false,
+            "optimizer": {
+                "class": "SGD",
+                "lr": 1e-3,
+                "momentum": 0.9
+            },
+            "scheduler": {
+                "class": "ExponentialLR",
+                "gamma": 0.95
+            },
+            "early_stopper": {
+                "patience": 5,
+                "min_delta": 1e-6
+            },
+            "data_loading": {
+                "batch_size": 4,
+                "grad_acc_iters": 1,
+                "num_workers": 4
+            },
+            "autocast": {
+                "enabled": false
+            },
+            "data_gradual_inc": {
+                "enabled": false
+            },
+            "ctsrbm_dataset": {
+                "neg_img_filename_list_id": "test",
+                "train_random_seed": 42,
+                "cutdown_ratio": 0.10
+            }
+        }
+    }
+}

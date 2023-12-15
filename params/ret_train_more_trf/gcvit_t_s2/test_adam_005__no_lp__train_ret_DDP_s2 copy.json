@@ -1,0 +1,47 @@
+{
+    "description": "Best Adam training without linear probing",
+    "experiment_name": "ret_train_more_trf/gcvit_t_s2/test_adam_005__no_lp",
+    "settings": {
+        "device_idxs": [2, 4, 5, 6],
+        "backbone": {
+            "class": "GCVitTinyBackbone",
+            "img_size": 224
+        },
+        "head": {
+            "class": "RetHead",
+            "emb_size": 1024
+        },
+        "stage_2": {
+            "max_epochs": 30,
+            "eval_epoch_0": false,
+            "optimizer": {
+                "class": "Adam",
+                "lr": 1.00e-6
+            },
+            "scheduler": {
+                "class": "ExponentialLR",
+                "gamma": 0.80
+            },
+            "early_stopper": {
+                "patience": 5,
+                "min_delta": 0
+            },
+            "data_loading": {
+                "batch_size": 16,
+                "num_workers": 4,
+                "grad_acc_iters": 1
+            },
+            "autocast": {
+                "enabled": false
+            },
+            "data_gradual_inc": {
+                "enabled": false
+            },
+            "ctsrbm_dataset": {
+                "neg_img_filename_list_id": "test_old",
+                "train_random_seed": 42,
+                "cutdown_ratio": 1
+            }
+        }
+    }
+}

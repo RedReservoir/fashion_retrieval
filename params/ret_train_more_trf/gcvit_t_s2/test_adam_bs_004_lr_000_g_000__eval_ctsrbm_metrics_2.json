@@ -1,0 +1,19 @@
+{
+    "experiment_name": "ret_train_more_trf/gcvit_t_s2/test_adam_bs_004_lr_000_g_000",
+    "settings": {
+        "model_checkpoint": "train_ret_DDP_stage_2__best_ckp.pth",
+        "device_idx": 8,
+        "data_loading": {
+            "batch_size": 64,
+            "num_workers": 8
+        },
+        "k_values": [
+            "all",
+            1,
+            10,
+            20,
+            50
+        ],
+        "cons_imgs_chunk_size": 2000
+    }
+}
